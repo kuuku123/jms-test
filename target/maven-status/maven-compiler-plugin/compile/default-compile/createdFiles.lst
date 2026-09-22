@@ -1,8 +1,0 @@
-com/example/jms/service/DynamicAsyncListenerService.class
-com/example/jms/model/BrowsedMessage.class
-com/example/jms/web/AppContextListener.class
-com/example/jms/service/DynamicAsyncListenerService$1.class
-com/example/jms/model/MessageActivityStore.class
-com/example/jms/web/JmsApiController.class
-com/example/jms/service/JmsService.class
-com/example/jms/model/ActivityRecord.class
