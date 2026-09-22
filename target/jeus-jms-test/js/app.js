@@ -8,8 +8,8 @@
 
     // Application state
     const state = {
-        cfJndi: "jms/ConnectionFactory",
-        destJndi: "jms/TestQueue",
+        cfJndi: "ConnectionFactory",
+        destJndi: "ExamplesQueue",
         listenerRunning: false,
         listeningDest: "",
         autoRefreshInterval: null,
@@ -73,11 +73,17 @@
         modalPayload: document.getElementById("modal-payload"),
 
         // Toast Container
-        toastContainer: document.getElementById("toast-container")
+        toastContainer: document.getElementById("toast-container"),
+
+        // Theme Toggle
+        btnThemeToggle: document.getElementById("btn-theme-toggle"),
+        themeToggleIcon: document.getElementById("theme-toggle-icon"),
+        themeToggleText: document.getElementById("theme-toggle-text")
     };
 
     // Initialization
     function init() {
+        setupTheme();
         loadSavedJndi();
         setupTabEvents();
         setupJndiEvents();
@@ -91,6 +97,43 @@
         fetchStatus();
         fetchActivities();
         setupAutoRefresh();
+    }
+
+    // Theme Management
+    function setupTheme() {
+        let savedTheme = "light";
+        try {
+            savedTheme = localStorage.getItem("jeus_jms_theme") || "light";
+        } catch (e) {
+            console.warn("Storage not accessible");
+        }
+        applyTheme(savedTheme);
+
+        if (elements.btnThemeToggle) {
+            elements.btnThemeToggle.addEventListener("click", function () {
+                const currentTheme = document.documentElement.getAttribute("data-theme") || "light";
+                const nextTheme = currentTheme === "dark" ? "light" : "dark";
+                applyTheme(nextTheme);
+                try {
+                    localStorage.setItem("jeus_jms_theme", nextTheme);
+                } catch (e) {}
+            });
+        }
+    }
+
+    function applyTheme(theme) {
+        document.documentElement.setAttribute("data-theme", theme);
+        if (elements.themeToggleIcon && elements.themeToggleText) {
+            if (theme === "dark") {
+                elements.themeToggleIcon.textContent = "☀️";
+                elements.themeToggleText.textContent = "Light";
+                elements.btnThemeToggle.setAttribute("title", "Switch to Light Mode");
+            } else {
+                elements.themeToggleIcon.textContent = "🌙";
+                elements.themeToggleText.textContent = "Dark";
+                elements.btnThemeToggle.setAttribute("title", "Switch to Dark Mode");
+            }
+        }
     }
 
     // Tab Navigation
@@ -118,16 +161,21 @@
     // JNDI Configuration & Storage
     function loadSavedJndi() {
         try {
-            const savedCf = localStorage.getItem("jeus_cf_jndi");
-            const savedDest = localStorage.getItem("jeus_dest_jndi");
-            if (savedCf) {
-                elements.inputCfJndi.value = savedCf;
-                state.cfJndi = savedCf;
+            let savedCf = localStorage.getItem("jeus_cf_jndi");
+            let savedDest = localStorage.getItem("jeus_dest_jndi");
+
+            // Migrate outdated defaults if previously stored in localStorage
+            if (!savedCf || savedCf === "jms/ConnectionFactory") {
+                savedCf = "ConnectionFactory";
             }
-            if (savedDest) {
-                elements.inputDestJndi.value = savedDest;
-                state.destJndi = savedDest;
+            if (!savedDest || savedDest === "jms/TestQueue") {
+                savedDest = "ExamplesQueue";
             }
+
+            elements.inputCfJndi.value = savedCf;
+            state.cfJndi = savedCf;
+            elements.inputDestJndi.value = savedDest;
+            state.destJndi = savedDest;
         } catch (e) {
             console.warn("Storage not accessible");
         }
@@ -673,7 +721,26 @@
     }
 
     // Helpers
+    const CONTEXT_PATH = (function () {
+        let p = window.location.pathname || "";
+        if (p.endsWith("/")) {
+            p = p.slice(0, -1);
+        } else if (p.includes(".")) {
+            p = p.substring(0, p.lastIndexOf("/"));
+        }
+        return p;
+    })();
+
+    function resolveUrl(url) {
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            return url;
+        }
+        const cleanUrl = url.startsWith("/") ? url : "/" + url;
+        return CONTEXT_PATH + cleanUrl;
+    }
+
     function fetchApi(url, method, body) {
+        const resolvedUrl = resolveUrl(url);
         const options = {
             method: method,
             headers: {
@@ -686,7 +753,17 @@
             options.body = JSON.stringify(body);
         }
 
-        return fetch(url, options).then(function (response) {
+        return fetch(resolvedUrl, options).then(function (response) {
+            if (!response.ok) {
+                return response.json().then(function (errJson) {
+                    throw new Error(errJson.error || ("HTTP " + response.status));
+                }).catch(function (e) {
+                    if (e && e.message && !e.message.startsWith("Unexpected token")) {
+                        throw e;
+                    }
+                    throw new Error("HTTP " + response.status + ": " + response.statusText);
+                });
+            }
             return response.json();
         });
     }

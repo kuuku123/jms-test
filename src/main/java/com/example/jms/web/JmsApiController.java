@@ -33,8 +33,8 @@ import java.util.logging.Logger;
 public class JmsApiController extends HttpServlet {
 
     private static final Logger LOGGER = Logger.getLogger(JmsApiController.class.getName());
-    private static final String DEFAULT_CF = "jms/ConnectionFactory";
-    private static final String DEFAULT_QUEUE = "jms/TestQueue";
+    private static final String DEFAULT_CF = "ConnectionFactory";
+    private static final String DEFAULT_QUEUE = "ExamplesQueue";
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {

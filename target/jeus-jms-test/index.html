@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -22,6 +22,9 @@
                 <span class="badge badge-tech">JEUS 8.5</span>
                 <span class="badge badge-tech">JMS 2.0 / 1.1</span>
                 <span id="listener-status-badge" class="badge badge-inactive">Listener: Inactive</span>
+                <button id="btn-theme-toggle" class="btn btn-secondary btn-sm theme-toggle-btn" type="button" title="Switch Theme">
+                    <span id="theme-toggle-icon">🌙</span> <span id="theme-toggle-text">Dark</span>
+                </button>
             </div>
         </div>
     </header>
@@ -37,13 +40,14 @@
                 <div class="form-group">
                     <label for="input-cf-jndi">Connection Factory JNDI</label>
                     <div class="input-with-presets">
-                        <input type="text" id="input-cf-jndi" value="jms/ConnectionFactory" placeholder="e.g. jms/ConnectionFactory">
+                        <input type="text" id="input-cf-jndi" value="ConnectionFactory" placeholder="e.g. ConnectionFactory">
                         <select id="preset-cf" class="preset-select" title="Select common preset">
                             <option value="">Presets...</option>
-                            <option value="jms/ConnectionFactory">jms/ConnectionFactory (Default)</option>
+                            <option value="ConnectionFactory">ConnectionFactory (Default)</option>
+                            <option value="XAConnectionFactory">XAConnectionFactory (XA)</option>
+                            <option value="jms/ConnectionFactory">jms/ConnectionFactory</option>
                             <option value="jms/QueueConnectionFactory">jms/QueueConnectionFactory</option>
                             <option value="jms/TopicConnectionFactory">jms/TopicConnectionFactory</option>
-                            <option value="ConnectionFactory">ConnectionFactory</option>
                         </select>
                     </div>
                 </div>
@@ -51,14 +55,15 @@
                 <div class="form-group">
                     <label for="input-dest-jndi">Destination JNDI (Queue or Topic)</label>
                     <div class="input-with-presets">
-                        <input type="text" id="input-dest-jndi" value="jms/TestQueue" placeholder="e.g. jms/TestQueue">
+                        <input type="text" id="input-dest-jndi" value="ExamplesQueue" placeholder="e.g. ExamplesQueue">
                         <select id="preset-dest" class="preset-select" title="Select common preset">
                             <option value="">Presets...</option>
-                            <option value="jms/TestQueue">jms/TestQueue (Queue)</option>
-                            <option value="jms/DefaultQueue">jms/DefaultQueue (Queue)</option>
-                            <option value="TestQueue">TestQueue (Queue)</option>
-                            <option value="jms/TestTopic">jms/TestTopic (Topic)</option>
-                            <option value="jms/DefaultTopic">jms/DefaultTopic (Topic)</option>
+                            <option value="ExamplesQueue">ExamplesQueue (Default Queue)</option>
+                            <option value="ExamplesTopic">ExamplesTopic (Default Topic)</option>
+                            <option value="JEUSMQ_AMQPQ">JEUSMQ_AMQPQ (AMQP Queue)</option>
+                            <option value="JEUSMQ_DLQ">JEUSMQ_DLQ (Dead Letter Queue)</option>
+                            <option value="jms/TestQueue">jms/TestQueue</option>
+                            <option value="jms/TestTopic">jms/TestTopic</option>
                         </select>
                     </div>
                 </div>
@@ -337,12 +342,11 @@
                     <div class="guide-step">
                         <div class="step-num">3</div>
                         <div class="step-content">
-                            <h4>Create Connection Factory</h4>
-                            <p>In the <strong>Connection Factory</strong> section, click <strong>Add</strong>:</p>
+                            <h4>Connection Factory JNDI Name</h4>
+                            <p>JEUS ships with pre-configured default factories bound under the root context:</p>
                             <ul>
-                                <li><strong>Name</strong>: <code>ConnectionFactory</code></li>
-                                <li><strong>Export Name (JNDI Name)</strong>: <code>jms/ConnectionFactory</code></li>
-                                <li>Click <strong>OK</strong></li>
+                                <li><strong>Default Factory</strong>: <code>ConnectionFactory</code></li>
+                                <li><strong>XA Factory</strong>: <code>XAConnectionFactory</code></li>
                             </ul>
                         </div>
                     </div>
@@ -350,25 +354,11 @@
                     <div class="guide-step">
                         <div class="step-num">4</div>
                         <div class="step-content">
-                            <h4>Create Queue Destination</h4>
-                            <p>In the <strong>Destination</strong> section, click <strong>Add</strong> and select <strong>Queue</strong>:</p>
+                            <h4>Default Destination JNDI Names</h4>
+                            <p>JEUS provides default example destinations ready out-of-the-box:</p>
                             <ul>
-                                <li><strong>Name</strong>: <code>TestQueue</code></li>
-                                <li><strong>Export Name (JNDI Name)</strong>: <code>jms/TestQueue</code></li>
-                                <li>Click <strong>OK</strong></li>
-                            </ul>
-                        </div>
-                    </div>
-
-                    <div class="guide-step">
-                        <div class="step-num">5</div>
-                        <div class="step-content">
-                            <h4>Create Topic Destination (Optional)</h4>
-                            <p>In the <strong>Destination</strong> section, click <strong>Add</strong> and select <strong>Topic</strong>:</p>
-                            <ul>
-                                <li><strong>Name</strong>: <code>TestTopic</code></li>
-                                <li><strong>Export Name (JNDI Name)</strong>: <code>jms/TestTopic</code></li>
-                                <li>Click <strong>OK</strong></li>
+                                <li><strong>Point-to-Point Queue</strong>: <code>ExamplesQueue</code> (or <code>JEUSMQ_AMQPQ</code>, <code>JEUSMQ_DLQ</code>)</li>
+                                <li><strong>Publish / Subscribe Topic</strong>: <code>ExamplesTopic</code></li>
                             </ul>
                         </div>
                     </div>
