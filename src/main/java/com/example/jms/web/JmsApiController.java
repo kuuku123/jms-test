@@ -35,6 +35,7 @@ public class JmsApiController extends HttpServlet {
     private static final Logger LOGGER = Logger.getLogger(JmsApiController.class.getName());
     private static final String DEFAULT_CF = "ConnectionFactory";
     private static final String DEFAULT_QUEUE = "ExamplesQueue";
+    private static final String DEFAULT_TM = "java:/TransactionManager";
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
@@ -67,6 +68,10 @@ public class JmsApiController extends HttpServlet {
                 handleTestJndi(req, resp);
             } else if ("/queue/send".equals(path)) {
                 handleSendQueue(req, resp);
+            } else if ("/queue/send-transactional".equals(path)) {
+                handleSendQueueTransactional(req, resp);
+            } else if ("/tx/test-tm".equals(path)) {
+                handleTestTm(req, resp);
             } else if ("/queue/receive".equals(path)) {
                 handleReceiveQueue(req, resp);
             } else if ("/topic/publish".equals(path)) {
@@ -102,7 +107,8 @@ public class JmsApiController extends HttpServlet {
                 .add("activeDestinations", activeDests)
                 .add("defaultCf", DEFAULT_CF)
                 .add("defaultQueue", DEFAULT_QUEUE)
-                .add("defaultTopic", "ExamplesTopic");
+                .add("defaultTopic", "ExamplesTopic")
+                .add("defaultTm", DEFAULT_TM);
 
         JsonObjectBuilder listenersObj = Json.createObjectBuilder();
         for (Map.Entry<String, DynamicAsyncListenerService.ActiveListenerContext> entry : listener.getActiveListeners().entrySet()) {
@@ -128,8 +134,9 @@ public class JmsApiController extends HttpServlet {
         JsonObject body = parseJsonBody(req);
         String cfJndi = sanitizeJndi(body.getString("cfJndi", DEFAULT_CF));
         String destJndi = body.containsKey("destJndi") ? body.getString("destJndi").trim() : "";
+        String tmJndi = body.containsKey("tmJndi") ? sanitizeJndi(body.getString("tmJndi")) : DEFAULT_TM;
 
-        Map<String, Object> testResult = JmsService.getInstance().testJndi(cfJndi, destJndi);
+        Map<String, Object> testResult = JmsService.getInstance().testJndi(cfJndi, destJndi, tmJndi);
 
         JsonObjectBuilder builder = Json.createObjectBuilder()
                 .add("success", (Boolean) testResult.get("success"))
@@ -138,8 +145,32 @@ public class JmsApiController extends HttpServlet {
                 .add("cfFound", (Boolean) testResult.getOrDefault("cfFound", false))
                 .add("destFound", (Boolean) testResult.getOrDefault("destFound", false))
                 .add("cfType", (String) testResult.getOrDefault("cfType", ""))
+                .add("isXA", (Boolean) testResult.getOrDefault("isXA", false))
+                .add("xaAvailable", (Boolean) testResult.getOrDefault("xaAvailable", false))
                 .add("destType", (String) testResult.getOrDefault("destType", ""))
-                .add("destCategory", (String) testResult.getOrDefault("destCategory", ""));
+                .add("destCategory", (String) testResult.getOrDefault("destCategory", ""))
+                .add("tmFound", (Boolean) testResult.getOrDefault("tmFound", false))
+                .add("tmType", (String) testResult.getOrDefault("tmType", ""))
+                .add("tmStatus", (String) testResult.getOrDefault("tmStatus", ""))
+                .add("tmError", (String) testResult.getOrDefault("tmError", ""));
+
+        writeJson(resp, builder.build());
+    }
+
+    private void handleTestTm(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        JsonObject body = parseJsonBody(req);
+        String tmJndi = sanitizeJndi(body.getString("tmJndi", DEFAULT_TM));
+
+        Map<String, Object> testResult = JmsService.getInstance().testTransactionManager(tmJndi);
+
+        JsonObjectBuilder builder = Json.createObjectBuilder()
+                .add("success", (Boolean) testResult.get("success"))
+                .add("tmJndi", (String) testResult.get("tmJndi"))
+                .add("message", (String) testResult.getOrDefault("message", ""))
+                .add("error", (String) testResult.getOrDefault("error", ""))
+                .add("tmFound", (Boolean) testResult.getOrDefault("tmFound", false))
+                .add("tmType", (String) testResult.getOrDefault("tmType", ""))
+                .add("tmStatus", (String) testResult.getOrDefault("tmStatus", ""));
 
         writeJson(resp, builder.build());
     }
@@ -172,6 +203,59 @@ public class JmsApiController extends HttpServlet {
                 .build();
 
         writeJson(resp, responseObj);
+    }
+
+    private void handleSendQueueTransactional(HttpServletRequest req, HttpServletResponse resp) throws Exception {
+        JsonObject body = parseJsonBody(req);
+        String cfJndi = sanitizeJndi(body.getString("cfJndi", DEFAULT_CF));
+        String destJndi = sanitizeJndi(body.getString("destJndi", DEFAULT_QUEUE));
+        String payload = body.getString("payload", "Transactional batch message from JEUS JMS Console");
+        int priority = body.getInt("priority", 4);
+        long ttl = body.getInt("timeToLive", 0);
+        String corrId = body.getString("correlationId", "");
+        int count = body.getInt("count", 10);
+        String txType = body.getString("txType", "JTA");
+        boolean simulateRollback = body.getBoolean("simulateRollback", false);
+        String tmJndi = sanitizeJndi(body.getString("tmJndi", DEFAULT_TM));
+
+        // Enforce input bounds
+        if (count < 1) count = 1;
+        if (count > 50) count = 50;
+
+        Map<String, String> properties = parseProperties(body);
+
+        Map<String, Object> txResult = JmsService.getInstance().sendQueueBatchTransactional(
+                cfJndi, destJndi, payload, priority, ttl, corrId, properties, count, txType, simulateRollback, tmJndi
+        );
+
+        JsonArrayBuilder idsArray = Json.createArrayBuilder();
+        @SuppressWarnings("unchecked")
+        List<String> msgIds = (List<String>) txResult.get("messageIds");
+        if (msgIds != null) {
+            for (String id : msgIds) {
+                idsArray.add(id);
+            }
+        }
+
+        JsonObjectBuilder responseBuilder = Json.createObjectBuilder()
+                .add("success", true)
+                .add("txType", (String) txResult.get("txType"))
+                .add("action", (String) txResult.get("action"))
+                .add("committed", (Boolean) txResult.get("committed"))
+                .add("message", (String) txResult.get("message"))
+                .add("messageIds", idsArray);
+
+        if (txResult.containsKey("sentCount")) {
+            responseBuilder.add("sentCount", (Integer) txResult.get("sentCount"));
+        }
+        if (txResult.containsKey("stagedCount")) {
+            responseBuilder.add("stagedCount", (Integer) txResult.get("stagedCount"));
+        }
+        if (txResult.containsKey("cfJndi")) {
+            responseBuilder.add("cfJndi", (String) txResult.get("cfJndi"));
+        }
+
+        writeJson(resp, responseBuilder.build());
     }
 
     private void handleBrowseQueue(HttpServletRequest req, HttpServletResponse resp) throws Exception {

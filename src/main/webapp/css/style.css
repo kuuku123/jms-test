@@ -348,8 +348,8 @@ body {
 
 .jndi-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr auto;
-    gap: 20px;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+    gap: 16px;
     align-items: end;
 }
 
@@ -725,6 +725,11 @@ textarea:focus {
 .action-PUBLISH { background: var(--action-pub-bg); color: var(--action-pub-color); border: 1px solid var(--action-pub-border); }
 .action-ASYNC_RECV { background: var(--action-async-bg); color: var(--action-async-color); border: 1px solid var(--action-async-border); }
 .action-TOPIC_RECV { background: var(--action-topic-bg); color: var(--action-topic-color); border: 1px solid var(--action-topic-border); }
+.action-TX_COMMIT { background: rgba(16, 185, 129, 0.15); color: #059669; border: 1px solid rgba(16, 185, 129, 0.35); }
+.action-TX_ROLLBACK { background: rgba(239, 68, 68, 0.15); color: #dc2626; border: 1px solid rgba(239, 68, 68, 0.35); }
+
+.status-committed { background: #ecfdf5; color: #047857; }
+.status-rolled_back { background: #fef2f2; color: #b91c1c; }
 
 .mono-cell {
     font-family: var(--font-mono);
@@ -1111,6 +1116,244 @@ textarea:focus {
 .btn-danger-outline:hover {
     background: var(--color-danger);
     color: #ffffff;
+}
+
+/* ==========================================================================
+   JTA Transaction Lab (java:/TransactionManager)
+   ========================================================================== */
+.tx-lab-container {
+    margin-top: 22px;
+    padding: 16px 18px;
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.tx-lab-container:hover {
+    border-color: var(--color-accent);
+}
+
+.tx-lab-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.tx-lab-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.tx-lab-title h4 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.tx-lab-badge {
+    background: linear-gradient(135deg, #7c3aed, #4f46e5);
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 9999px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.tx-lab-tm-badge {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    background: var(--code-inline-bg);
+    color: var(--color-accent);
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(124, 58, 237, 0.25);
+    font-weight: 600;
+}
+
+.tx-lab-description {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 14px;
+    line-height: 1.45;
+}
+
+.tx-mode-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 14px;
+}
+
+.tx-control-label {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.tx-radio-pills {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.tx-radio-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+    user-select: none;
+}
+
+.tx-radio-pill input[type="radio"] {
+    accent-color: var(--color-accent);
+    margin: 0;
+}
+
+.tx-radio-pill:hover {
+    border-color: var(--color-accent);
+}
+
+.tx-radio-pill.active {
+    border-color: var(--color-accent);
+    background: rgba(124, 58, 237, 0.08);
+    font-weight: 600;
+}
+
+.tx-batch-row {
+    margin-bottom: 14px;
+}
+
+.tx-count-group {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.tx-count-group input {
+    width: 80px;
+}
+
+.quick-batch-pills {
+    display: flex;
+    gap: 6px;
+}
+
+.btn-preset-batch {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    padding: 5px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.btn-preset-batch:hover {
+    background: var(--bg-surface-elevated);
+    border-color: var(--color-primary);
+}
+
+.btn-preset-batch.active {
+    background: var(--color-accent);
+    color: #ffffff;
+    border-color: var(--color-accent);
+}
+
+.tx-actions-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.btn-tx-commit,
+.btn-tx-rollback {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
+    text-align: left;
+}
+
+.btn-tx-commit:hover,
+.btn-tx-rollback:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+}
+
+.btn-tx-commit {
+    background: linear-gradient(135deg, #059669, #047857);
+    color: #ffffff;
+    border: 1px solid #047857;
+}
+
+.btn-tx-rollback {
+    background: linear-gradient(135deg, #dc2626, #b91c1c);
+    color: #ffffff;
+    border: 1px solid #b91c1c;
+}
+
+.tx-btn-icon {
+    font-size: 18px;
+    font-weight: 900;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.tx-btn-text {
+    display: flex;
+    flex-direction: column;
+}
+
+.tx-btn-text strong {
+    font-size: 13.5px;
+    line-height: 1.2;
+}
+
+.tx-btn-text small {
+    font-size: 11px;
+    opacity: 0.9;
+    margin-top: 2px;
+}
+
+.tx-info-callout {
+    background: rgba(37, 99, 235, 0.08);
+    border-left: 3px solid var(--color-primary);
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+}
+
+@media (max-width: 600px) {
+    .tx-actions-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 

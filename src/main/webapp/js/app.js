@@ -27,8 +27,10 @@
     const elements = {
         inputCfJndi: document.getElementById("input-cf-jndi"),
         inputDestJndi: document.getElementById("input-dest-jndi"),
+        inputTmJndi: document.getElementById("input-tm-jndi"),
         presetCf: document.getElementById("preset-cf"),
         presetDest: document.getElementById("preset-dest"),
+        presetTm: document.getElementById("preset-tm"),
         btnTestJndi: document.getElementById("btn-test-jndi"),
         btnSaveJndi: document.getElementById("btn-save-jndi"),
         jndiResultBox: document.getElementById("jndi-result-box"),
@@ -48,6 +50,11 @@
         propertiesContainer: document.getElementById("properties-container"),
         btnAddProperty: document.getElementById("btn-add-property"),
         btnSendBatch: document.getElementById("btn-send-batch"),
+        btnTxCommit: document.getElementById("btn-tx-commit"),
+        btnTxRollback: document.getElementById("btn-tx-rollback"),
+        txBatchCount: document.getElementById("tx-batch-count"),
+        presetBatchBtns: document.querySelectorAll(".btn-preset-batch"),
+        txModeRadios: document.querySelectorAll('input[name="tx-mode"]'),
         browserSelector: document.getElementById("browser-selector"),
         btnBrowseQueue: document.getElementById("btn-browse-queue"),
         btnReceiveQueue: document.getElementById("btn-receive-queue"),
@@ -118,6 +125,7 @@
         setupJndiEvents();
         setupPropertyEvents();
         setupQueueEvents();
+        setupTransactionEvents();
         setupTopicEvents();
         setupActivityEvents();
         setupModalEvents();
@@ -205,6 +213,7 @@
             let savedCf = localStorage.getItem("jeus_cf_jndi");
             let savedDest = localStorage.getItem("jeus_dest_jndi");
             let savedTopicDest = localStorage.getItem("jeus_topic_dest_jndi");
+            let savedTm = localStorage.getItem("jeus_tm_jndi");
 
             if (!savedCf || savedCf === "jms/ConnectionFactory") {
                 savedCf = "ConnectionFactory";
@@ -215,11 +224,18 @@
             if (!savedTopicDest) {
                 savedTopicDest = "ExamplesTopic";
             }
+            if (!savedTm) {
+                savedTm = "java:/TransactionManager";
+            }
 
             elements.inputCfJndi.value = savedCf;
             state.cfJndi = savedCf;
             elements.inputDestJndi.value = savedDest;
             state.destJndi = savedDest;
+            if (elements.inputTmJndi) {
+                elements.inputTmJndi.value = savedTm;
+            }
+            state.tmJndi = savedTm;
 
             if (elements.topicDestJndi) {
                 elements.topicDestJndi.value = savedTopicDest;
@@ -259,15 +275,28 @@
             }
         });
 
+        if (elements.presetTm) {
+            elements.presetTm.addEventListener("change", function () {
+                if (elements.presetTm.value) {
+                    elements.inputTmJndi.value = elements.presetTm.value;
+                    state.tmJndi = elements.presetTm.value;
+                    elements.presetTm.value = "";
+                }
+            });
+        }
+
         // Save Defaults
         elements.btnSaveJndi.addEventListener("click", function () {
             state.cfJndi = elements.inputCfJndi.value.trim();
             state.destJndi = elements.inputDestJndi.value.trim();
             const topicDest = elements.topicDestJndi ? elements.topicDestJndi.value.trim() : "ExamplesTopic";
+            const tmJndi = elements.inputTmJndi ? elements.inputTmJndi.value.trim() : "java:/TransactionManager";
+            state.tmJndi = tmJndi;
             try {
                 localStorage.setItem("jeus_cf_jndi", state.cfJndi);
                 localStorage.setItem("jeus_dest_jndi", state.destJndi);
                 localStorage.setItem("jeus_topic_dest_jndi", topicDest);
+                localStorage.setItem("jeus_tm_jndi", state.tmJndi);
                 showToast("JNDI configuration saved to browser defaults.", "success");
             } catch (e) {
                 showToast("Failed to save to localStorage.", "error");
@@ -283,11 +312,12 @@
     function testJndiLookup() {
         const cfJndi = elements.inputCfJndi.value.trim();
         const destJndi = elements.inputDestJndi.value.trim();
+        const tmJndi = elements.inputTmJndi ? elements.inputTmJndi.value.trim() : "java:/TransactionManager";
 
         elements.jndiResultBox.className = "result-banner hidden";
         elements.jndiResultText.textContent = "Testing JNDI lookup on JEUS server...";
 
-        fetchApi("/api/jms/test-jndi", "POST", { cfJndi: cfJndi, destJndi: destJndi })
+        fetchApi("/api/jms/test-jndi", "POST", { cfJndi: cfJndi, destJndi: destJndi, tmJndi: tmJndi })
             .then(function (res) {
                 elements.jndiResultBox.classList.remove("hidden");
                 if (res.success) {
@@ -295,6 +325,11 @@
                     let msg = "✓ SUCCESS: Connected to ConnectionFactory (" + (res.cfType || "OK") + ")";
                     if (res.destFound) {
                         msg += " and Destination (" + (res.destType || "OK") + ")";
+                    }
+                    if (res.tmFound) {
+                        msg += " and TransactionManager (" + (res.tmType || "OK") + ", " + (res.tmStatus || "Ready") + ")";
+                    } else if (res.tmError) {
+                        msg += " [TM Notice: " + res.tmError + "]";
                     }
                     elements.jndiResultText.textContent = msg;
                     showToast("JNDI verification succeeded!", "success");
@@ -508,6 +543,105 @@
             })
             .catch(function (err) {
                 showToast("Error sending message: " + err.message, "error");
+            });
+    }
+
+    // Transaction Lab Event Setup
+    function setupTransactionEvents() {
+        if (elements.btnTxCommit) {
+            elements.btnTxCommit.addEventListener("click", function () {
+                sendTransactionalQueueMessage(false);
+            });
+        }
+
+        if (elements.btnTxRollback) {
+            elements.btnTxRollback.addEventListener("click", function () {
+                sendTransactionalQueueMessage(true);
+            });
+        }
+
+        if (elements.presetBatchBtns) {
+            elements.presetBatchBtns.forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                    elements.presetBatchBtns.forEach(function (b) { b.classList.remove("active"); });
+                    btn.classList.add("active");
+                    const count = parseInt(btn.getAttribute("data-count"), 10) || 10;
+                    if (elements.txBatchCount) {
+                        elements.txBatchCount.value = count;
+                    }
+                });
+            });
+        }
+
+        if (elements.txModeRadios) {
+            elements.txModeRadios.forEach(function (radio) {
+                radio.addEventListener("change", function () {
+                    document.querySelectorAll(".tx-radio-pill").forEach(function (pill) {
+                        pill.classList.remove("active");
+                    });
+                    const parentPill = radio.closest(".tx-radio-pill");
+                    if (parentPill) parentPill.classList.add("active");
+                });
+            });
+        }
+    }
+
+    function sendTransactionalQueueMessage(simulateRollback) {
+        const payload = elements.queuePayload.value;
+        const priority = parseInt(elements.queuePriority.value, 10) || 4;
+        const ttl = parseInt(elements.queueTtl.value, 10) || 0;
+        const correlationId = elements.queueCorrelation.value.trim();
+        const properties = collectProperties();
+        const count = elements.txBatchCount ? (parseInt(elements.txBatchCount.value, 10) || 10) : 10;
+
+        let selectedTxMode = "JTA";
+        const checkedRadio = document.querySelector('input[name="tx-mode"]:checked');
+        if (checkedRadio) {
+            selectedTxMode = checkedRadio.value;
+        }
+
+        const tmJndi = elements.inputTmJndi ? elements.inputTmJndi.value.trim() : "java:/TransactionManager";
+        let cfJndi = elements.inputCfJndi.value.trim();
+        // If JTA mode is selected and CF is standard ConnectionFactory, auto-use XAConnectionFactory for 2PC enlistment
+        if (selectedTxMode === "JTA" && (cfJndi === "ConnectionFactory" || !cfJndi)) {
+            cfJndi = "XAConnectionFactory";
+        }
+
+        const reqData = {
+            cfJndi: cfJndi,
+            destJndi: elements.inputDestJndi.value.trim(),
+            payload: payload,
+            priority: priority,
+            timeToLive: ttl,
+            correlationId: correlationId,
+            properties: properties,
+            count: count,
+            txType: selectedTxMode,
+            simulateRollback: simulateRollback,
+            tmJndi: tmJndi
+        };
+
+        const actionText = simulateRollback ? "Simulating Rollback" : "Committing Batch";
+        showToast(actionText + " (" + count + " msgs via " + selectedTxMode + ")...", "info");
+
+        fetchApi("/api/jms/queue/send-transactional", "POST", reqData)
+            .then(function (res) {
+                if (res.success) {
+                    if (simulateRollback) {
+                        showToast(res.message || ("Rollback succeeded: 0 messages persisted."), "warning");
+                    } else {
+                        showToast(res.message || ("Committed " + (res.sentCount || count) + " messages atomically!"), "success");
+                    }
+                    fetchActivities();
+                    // Auto-browse to let user immediately inspect the actual queue messages
+                    browseQueue();
+                } else {
+                    showToast("Transaction failed: " + (res.error || res.message || "Unknown error"), "error");
+                    fetchActivities();
+                }
+            })
+            .catch(function (err) {
+                showToast("Transaction error: " + err.message, "error");
             });
     }
 

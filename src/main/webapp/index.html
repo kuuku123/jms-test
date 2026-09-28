@@ -68,6 +68,19 @@
                     </div>
                 </div>
 
+                <div class="form-group">
+                    <label for="input-tm-jndi">TransactionManager JNDI</label>
+                    <div class="input-with-presets">
+                        <input type="text" id="input-tm-jndi" value="java:/TransactionManager" placeholder="e.g. java:/TransactionManager">
+                        <select id="preset-tm" class="preset-select" title="Select common preset">
+                            <option value="">Presets...</option>
+                            <option value="java:/TransactionManager">java:/TransactionManager (JEUS)</option>
+                            <option value="java:comp/UserTransaction">java:comp/UserTransaction</option>
+                            <option value="java:comp/TransactionManager">java:comp/TransactionManager</option>
+                        </select>
+                    </div>
+                </div>
+
                 <div class="form-actions-jndi">
                     <button id="btn-test-jndi" class="btn btn-primary" type="button">Test JNDI Lookup</button>
                     <button id="btn-save-jndi" class="btn btn-secondary" type="button">Save Defaults</button>
@@ -139,7 +152,73 @@
 
                         <div class="form-actions">
                             <button type="submit" id="btn-send-single" class="btn btn-primary">Send Message</button>
-                            <button type="button" id="btn-send-batch" class="btn btn-accent">Batch Send (10x)</button>
+                            <button type="button" id="btn-send-batch" class="btn btn-accent">Batch Send (10x, Non-TX)</button>
+                        </div>
+
+                        <!-- JTA Transaction Lab (java:/TransactionManager) -->
+                        <div class="tx-lab-container">
+                            <div class="tx-lab-header">
+                                <div class="tx-lab-title">
+                                    <span class="tx-lab-badge">JTA 2PC Lab</span>
+                                    <h4>Transaction Batch Studio</h4>
+                                </div>
+                                <span class="tx-lab-tm-badge" title="Target JNDI TransactionManager">java:/TransactionManager</span>
+                            </div>
+
+                            <p class="tx-lab-description">
+                                Enclose batch message delivery within a 2-Phase Commit (2PC) JTA transaction using JEUS <code>java:/TransactionManager</code> and <code>XAConnectionFactory</code>.
+                            </p>
+
+                            <div class="tx-lab-controls">
+                                <div class="tx-mode-selector">
+                                    <span class="tx-control-label">Transaction Mode:</span>
+                                    <div class="tx-radio-pills">
+                                        <label class="tx-radio-pill active" title="Uses JEUS TransactionManager and XAConnectionFactory for 2-Phase Commit">
+                                            <input type="radio" name="tx-mode" value="JTA" checked>
+                                            <span>JTA (java:/TransactionManager &bull; XA 2PC)</span>
+                                        </label>
+                                        <label class="tx-radio-pill" title="Uses local Session.SESSION_TRANSACTED commit/rollback">
+                                            <input type="radio" name="tx-mode" value="LOCAL">
+                                            <span>Local JMS (session.commit / rollback)</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="tx-batch-row">
+                                    <div class="form-group flex-1">
+                                        <label for="tx-batch-count">Batch Size</label>
+                                        <div class="tx-count-group">
+                                            <input type="number" id="tx-batch-count" min="1" max="50" value="10">
+                                            <div class="quick-batch-pills">
+                                                <button type="button" class="btn-preset-batch" data-count="5">5x</button>
+                                                <button type="button" class="btn-preset-batch active" data-count="10">10x</button>
+                                                <button type="button" class="btn-preset-batch" data-count="20">20x</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="tx-actions-grid">
+                                    <button type="button" id="btn-tx-commit" class="btn btn-tx-commit">
+                                        <span class="tx-btn-icon">✓</span>
+                                        <div class="tx-btn-text">
+                                            <strong>Batch Commit</strong>
+                                            <small>Calls tm.commit() &rarr; All messages persist</small>
+                                        </div>
+                                    </button>
+                                    <button type="button" id="btn-tx-rollback" class="btn btn-tx-rollback">
+                                        <span class="tx-btn-icon">✕</span>
+                                        <div class="tx-btn-text">
+                                            <strong>Simulate Rollback</strong>
+                                            <small>Calls tm.rollback() &rarr; 0 messages persist</small>
+                                        </div>
+                                    </button>
+                                </div>
+
+                                <div class="tx-info-callout">
+                                    <strong>Verify Atomicity:</strong> Click <em>"Simulate Rollback"</em> then <em>"Browse Messages"</em> below &mdash; queue depth remains 0. Click <em>"Batch Commit"</em> to see all messages arrive atomically!
+                                </div>
+                            </div>
                         </div>
                     </form>
                 </div>
@@ -491,6 +570,20 @@
 
                     <div class="guide-step">
                         <div class="step-num">5</div>
+                        <div class="step-content">
+                            <h4>JEUS JTA TransactionManager (<code>java:/TransactionManager</code>)</h4>
+                            <p>JEUS exposes its JTA Transaction Manager under the JNDI name <code>java:/TransactionManager</code>. This enables 2-Phase Commit (2PC) distributed transactions combining JMS and JDBC:</p>
+                            <ul>
+                                <li><strong>TransactionManager Lookup</strong>: <code>(TransactionManager) ctx.lookup("java:/TransactionManager")</code></li>
+                                <li><strong>JTA Lifecycle</strong>: <code>tm.begin()</code> &rarr; send batch messages &rarr; <code>tm.commit()</code> or <code>tm.rollback()</code></li>
+                                <li><strong>XA Connection Factory</strong>: Use <code>XAConnectionFactory</code> for full XA/2PC enlistment or standard <code>ConnectionFactory</code> in container-managed sessions.</li>
+                                <li><strong>Atomicity Guarantee</strong>: Calling <code>tm.rollback()</code> ensures zero messages are delivered to consumers, preventing dirty reads or partial writes.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="guide-step">
+                        <div class="step-num">6</div>
                         <div class="step-content">
                             <h4>Activate Changes</h4>
                             <p>Click the <strong>Lock &amp; Edit</strong> &rarr; <strong>Activate Changes</strong> button on the top-left of the WebAdmin console to apply changes to JEUS.</p>
