@@ -10,10 +10,17 @@
     const state = {
         cfJndi: "ConnectionFactory",
         destJndi: "ExamplesQueue",
+        topicDestJndi: "ExamplesTopic",
         listenerRunning: false,
         listeningDest: "",
+        activeDestinations: [],
+        activeListenersMap: {},
         autoRefreshInterval: null,
-        lastBrowsedMessages: []
+        lastBrowsedMessages: [],
+        lastTopicEvents: [],
+        lastActivities: [],
+        clearedTopicEventIds: new Set(),
+        topicClearedTimestamp: null
     };
 
     // DOM Elements
@@ -49,12 +56,34 @@
         browseTableBody: document.getElementById("browse-table-body"),
         btnClearBrowseView: document.getElementById("btn-clear-browse-view"),
 
-        // Topic Studio
+        // Topic Studio - Publisher
+        topicDestJndi: document.getElementById("topic-dest-jndi"),
+        presetTopicDest: document.getElementById("preset-topic-dest"),
         formPublishTopic: document.getElementById("form-publish-topic"),
+        btnPublishTopicBatch: document.getElementById("btn-publish-topic-batch"),
         topicPayload: document.getElementById("topic-payload"),
         topicPriority: document.getElementById("topic-priority"),
         topicTtl: document.getElementById("topic-ttl"),
         topicCorrelation: document.getElementById("topic-correlation"),
+        topicPropertiesContainer: document.getElementById("topic-properties-container"),
+        btnAddTopicProperty: document.getElementById("btn-add-topic-property"),
+
+        // Topic Studio - Subscriber
+        topicSubDestJndi: document.getElementById("topic-sub-dest-jndi"),
+        topicSelector: document.getElementById("topic-selector"),
+        subModeNonDurable: document.getElementById("sub-mode-nondurable"),
+        subModeDurable: document.getElementById("sub-mode-durable"),
+        durableOptionsBox: document.getElementById("durable-options-box"),
+        topicClientId: document.getElementById("topic-client-id"),
+        topicSubName: document.getElementById("topic-sub-name"),
+        btnTopicUnsubscribe: document.getElementById("btn-topic-unsubscribe"),
+        topicListenerDesc: document.getElementById("topic-listener-desc"),
+        btnToggleTopicListener: document.getElementById("btn-toggle-topic-listener"),
+        topicSubscriberStatus: document.getElementById("topic-subscriber-status"),
+        topicEventsCountLabel: document.getElementById("topic-events-count-label"),
+        topicEventsTableBody: document.getElementById("topic-events-table-body"),
+        btnClearTopicView: document.getElementById("btn-clear-topic-view"),
+        btnLoadTopicHistory: document.getElementById("btn-load-topic-history"),
 
         // Activities
         activityTableBody: document.getElementById("activity-table-body"),
@@ -154,6 +183,18 @@
                 if (targetPane) {
                     targetPane.classList.add("active");
                 }
+
+                // If switching to Topic Studio, sync topic destination if top bar has a topic
+                if (targetTabId === "tab-topic" && elements.topicDestJndi) {
+                    const topDest = elements.inputDestJndi.value.trim();
+                    if (topDest && (topDest.toLowerCase().includes("topic") || topDest === "ExamplesTopic")) {
+                        elements.topicDestJndi.value = topDest;
+                        if (elements.topicSubDestJndi) {
+                            elements.topicSubDestJndi.value = topDest;
+                        }
+                    }
+                    updateListenerUI();
+                }
             });
         });
     }
@@ -163,19 +204,30 @@
         try {
             let savedCf = localStorage.getItem("jeus_cf_jndi");
             let savedDest = localStorage.getItem("jeus_dest_jndi");
+            let savedTopicDest = localStorage.getItem("jeus_topic_dest_jndi");
 
-            // Migrate outdated defaults if previously stored in localStorage
             if (!savedCf || savedCf === "jms/ConnectionFactory") {
                 savedCf = "ConnectionFactory";
             }
             if (!savedDest || savedDest === "jms/TestQueue") {
                 savedDest = "ExamplesQueue";
             }
+            if (!savedTopicDest) {
+                savedTopicDest = "ExamplesTopic";
+            }
 
             elements.inputCfJndi.value = savedCf;
             state.cfJndi = savedCf;
             elements.inputDestJndi.value = savedDest;
             state.destJndi = savedDest;
+
+            if (elements.topicDestJndi) {
+                elements.topicDestJndi.value = savedTopicDest;
+            }
+            if (elements.topicSubDestJndi) {
+                elements.topicSubDestJndi.value = savedTopicDest;
+            }
+            state.topicDestJndi = savedTopicDest;
         } catch (e) {
             console.warn("Storage not accessible");
         }
@@ -195,7 +247,15 @@
             if (elements.presetDest.value) {
                 elements.inputDestJndi.value = elements.presetDest.value;
                 state.destJndi = elements.presetDest.value;
+
+                // If a topic preset was selected, also update Topic Studio inputs
+                if (elements.presetDest.value.toLowerCase().includes("topic")) {
+                    if (elements.topicDestJndi) elements.topicDestJndi.value = elements.presetDest.value;
+                    if (elements.topicSubDestJndi) elements.topicSubDestJndi.value = elements.presetDest.value;
+                }
+
                 elements.presetDest.value = "";
+                updateListenerUI();
             }
         });
 
@@ -203,9 +263,11 @@
         elements.btnSaveJndi.addEventListener("click", function () {
             state.cfJndi = elements.inputCfJndi.value.trim();
             state.destJndi = elements.inputDestJndi.value.trim();
+            const topicDest = elements.topicDestJndi ? elements.topicDestJndi.value.trim() : "ExamplesTopic";
             try {
                 localStorage.setItem("jeus_cf_jndi", state.cfJndi);
                 localStorage.setItem("jeus_dest_jndi", state.destJndi);
+                localStorage.setItem("jeus_topic_dest_jndi", topicDest);
                 showToast("JNDI configuration saved to browser defaults.", "success");
             } catch (e) {
                 showToast("Failed to save to localStorage.", "error");
@@ -251,6 +313,7 @@
 
     // Custom Properties Row Management
     function setupPropertyEvents() {
+        // Queue properties
         elements.btnAddProperty.addEventListener("click", function () {
             addPropertyRow("", "");
         });
@@ -264,6 +327,29 @@
                 }
             }
         });
+
+        // Topic properties
+        if (elements.btnAddTopicProperty) {
+            elements.btnAddTopicProperty.addEventListener("click", function () {
+                addTopicPropertyRow("", "");
+            });
+        }
+
+        if (elements.topicPropertiesContainer) {
+            elements.topicPropertiesContainer.addEventListener("click", function (e) {
+                const target = e.target;
+                if (target && target.classList.contains("btn-remove-prop")) {
+                    const row = target.closest(".property-row");
+                    if (row) {
+                        row.remove();
+                    }
+                }
+            });
+
+            // Default initial filterable properties for Topic Studio
+            addTopicPropertyRow("eventType", "PRICE_UPDATE");
+            addTopicPropertyRow("symbol", "TMAX");
+        }
     }
 
     function addPropertyRow(key, val) {
@@ -294,9 +380,56 @@
         elements.propertiesContainer.appendChild(row);
     }
 
+    function addTopicPropertyRow(key, val) {
+        if (!elements.topicPropertiesContainer) return;
+        const row = document.createElement("div");
+        row.className = "property-row";
+
+        const inputKey = document.createElement("input");
+        inputKey.type = "text";
+        inputKey.className = "prop-key";
+        inputKey.placeholder = "Key (e.g. eventType)";
+        inputKey.value = key;
+
+        const inputVal = document.createElement("input");
+        inputVal.type = "text";
+        inputVal.className = "prop-val";
+        inputVal.placeholder = "Value (e.g. PRICE_UPDATE)";
+        inputVal.value = val;
+
+        const btnRemove = document.createElement("button");
+        btnRemove.type = "button";
+        btnRemove.className = "btn btn-sm btn-danger btn-remove-prop";
+        btnRemove.textContent = "×";
+
+        row.appendChild(inputKey);
+        row.appendChild(inputVal);
+        row.appendChild(btnRemove);
+
+        elements.topicPropertiesContainer.appendChild(row);
+    }
+
     function collectProperties() {
         const props = {};
         const rows = elements.propertiesContainer.querySelectorAll(".property-row");
+        rows.forEach(function (row) {
+            const keyEl = row.querySelector(".prop-key");
+            const valEl = row.querySelector(".prop-val");
+            if (keyEl && valEl) {
+                const key = keyEl.value.trim();
+                const val = valEl.value.trim();
+                if (key.length > 0) {
+                    props[key] = val;
+                }
+            }
+        });
+        return props;
+    }
+
+    function collectTopicProperties() {
+        if (!elements.topicPropertiesContainer) return {};
+        const props = {};
+        const rows = elements.topicPropertiesContainer.querySelectorAll(".property-row");
         rows.forEach(function (row) {
             const keyEl = row.querySelector(".prop-key");
             const valEl = row.querySelector(".prop-val");
@@ -341,6 +474,7 @@
 
         // Clear Browse View
         elements.btnClearBrowseView.addEventListener("click", function () {
+            state.lastBrowsedMessages = [];
             renderBrowseTable([]);
         });
     }
@@ -418,7 +552,6 @@
                         openMessageModal(res.message);
                     }
                     fetchActivities();
-                    // Also refresh browse view if it had contents
                     if (state.lastBrowsedMessages.length > 0) {
                         browseQueue();
                     }
@@ -432,32 +565,36 @@
     }
 
     function toggleBackgroundListener() {
-        if (state.listenerRunning) {
-            // Stop listener
-            fetchApi("/api/jms/listener/stop", "POST", {})
+        const destJndi = elements.inputDestJndi.value.trim();
+        const cfJndi = elements.inputCfJndi.value.trim();
+        const isListening = state.activeDestinations && state.activeDestinations.includes(destJndi);
+
+        if (isListening) {
+            fetchApi("/api/jms/listener/stop", "POST", { destJndi: destJndi })
                 .then(function (res) {
-                    state.listenerRunning = false;
+                    state.activeDestinations = res.activeDestinations || [];
+                    state.listenerRunning = res.listenerRunning;
                     updateListenerUI();
-                    showToast("Dynamic Background Listener stopped.", "info");
+                    showToast("Stopped background listener on " + destJndi, "info");
                     fetchActivities();
                 })
                 .catch(function (err) {
                     showToast("Failed to stop listener: " + err.message, "error");
                 });
         } else {
-            // Start listener
             const reqData = {
-                cfJndi: elements.inputCfJndi.value.trim(),
-                destJndi: elements.inputDestJndi.value.trim()
+                cfJndi: cfJndi,
+                destJndi: destJndi,
+                selector: elements.browserSelector.value.trim()
             };
 
             fetchApi("/api/jms/listener/start", "POST", reqData)
                 .then(function (res) {
                     if (res.success) {
+                        state.activeDestinations = res.activeDestinations || [res.listeningDestination];
                         state.listenerRunning = true;
-                        state.listeningDest = res.listeningDestination;
                         updateListenerUI();
-                        showToast("Dynamic Background Listener active on " + res.listeningDestination, "success");
+                        showToast("Background listener active on " + res.listeningDestination, "success");
                         fetchActivities();
                     } else {
                         showToast("Could not start listener: " + res.error, "error");
@@ -469,17 +606,127 @@
         }
     }
 
+    function toggleTopicListener() {
+        const topicDest = (elements.topicSubDestJndi ? elements.topicSubDestJndi.value.trim() : "") || "ExamplesTopic";
+        const cfJndi = elements.inputCfJndi.value.trim();
+        const isListening = state.activeDestinations && state.activeDestinations.includes(topicDest);
+
+        if (isListening) {
+            fetchApi("/api/jms/listener/stop", "POST", { destJndi: topicDest })
+                .then(function (res) {
+                    state.activeDestinations = res.activeDestinations || [];
+                    state.listenerRunning = res.listenerRunning;
+                    if (state.activeListenersMap && state.activeListenersMap[topicDest]) {
+                        delete state.activeListenersMap[topicDest];
+                    }
+                    updateListenerUI();
+                    showToast("Stopped topic subscriber on " + topicDest, "info");
+                    fetchActivities();
+                })
+                .catch(function (err) {
+                    showToast("Failed to stop topic subscriber: " + err.message, "error");
+                });
+        } else {
+            const isDurable = elements.subModeDurable && elements.subModeDurable.checked;
+            const clientId = elements.topicClientId ? elements.topicClientId.value.trim() : "JmsStudioClient-01";
+            const subscriptionName = elements.topicSubName ? elements.topicSubName.value.trim() : "TopicSub-01";
+
+            if (isDurable) {
+                if (!clientId) {
+                    showToast("ClientID is required for durable subscription.", "error");
+                    return;
+                }
+                if (!subscriptionName) {
+                    showToast("Subscription Name is required for durable subscription.", "error");
+                    return;
+                }
+            }
+
+            const reqData = {
+                cfJndi: cfJndi,
+                destJndi: topicDest,
+                selector: elements.topicSelector ? elements.topicSelector.value.trim() : "",
+                durable: isDurable,
+                clientId: clientId,
+                subscriptionName: subscriptionName
+            };
+
+            fetchApi("/api/jms/listener/start", "POST", reqData)
+                .then(function (res) {
+                    if (res.success) {
+                        state.activeDestinations = res.activeDestinations || [res.listeningDestination];
+                        state.listenerRunning = true;
+                        fetchStatus();
+                        const modeMsg = isDurable ? " (Durable: " + subscriptionName + ")" : "";
+                        showToast("Topic subscriber active on " + res.listeningDestination + modeMsg, "success");
+                        fetchActivities();
+                    } else {
+                        showToast("Could not start topic subscriber: " + res.error, "error");
+                    }
+                })
+                .catch(function (err) {
+                    showToast("Topic subscriber start failed: " + err.message, "error");
+                });
+        }
+    }
+
     function updateListenerUI() {
-        if (state.listenerRunning) {
+        const activeList = state.activeDestinations || [];
+        const queueDest = elements.inputDestJndi.value.trim();
+        const topicDest = elements.topicSubDestJndi ? elements.topicSubDestJndi.value.trim() : "ExamplesTopic";
+
+        // Global Header Badge
+        if (activeList.length > 0) {
             elements.listenerBadge.className = "badge badge-active";
-            elements.listenerBadge.textContent = "Listener: Active (" + state.listeningDest + ")";
-            elements.btnToggleListener.className = "btn btn-danger";
-            elements.btnToggleListener.textContent = "⏹ Stop Listener";
+            elements.listenerBadge.textContent = "Listeners: " + activeList.length + " Active (" + activeList.join(", ") + ")";
         } else {
             elements.listenerBadge.className = "badge badge-inactive";
             elements.listenerBadge.textContent = "Listener: Inactive";
+        }
+
+        // Queue Listener Button
+        const isQueueActive = activeList.includes(queueDest);
+        if (isQueueActive) {
+            elements.btnToggleListener.className = "btn btn-danger";
+            elements.btnToggleListener.textContent = "⏹ Stop Listener";
+        } else {
             elements.btnToggleListener.className = "btn btn-outline";
             elements.btnToggleListener.textContent = "▶ Start Background Listener";
+        }
+
+        // Topic Subscriber Button & Status
+        if (elements.btnToggleTopicListener && elements.topicSubscriberStatus) {
+            const isTopicActive = activeList.includes(topicDest);
+            if (isTopicActive) {
+                elements.btnToggleTopicListener.className = "btn btn-danger";
+                elements.btnToggleTopicListener.textContent = "⏹ Stop Topic Subscriber";
+                elements.topicSubscriberStatus.className = "subscriber-live-tag active";
+
+                const listenerMeta = state.activeListenersMap && state.activeListenersMap[topicDest];
+                if (listenerMeta && listenerMeta.durable) {
+                    const subInfo = listenerMeta.subscriptionName ? " [DURABLE: " + listenerMeta.subscriptionName + "]" : " [DURABLE]";
+                    elements.topicSubscriberStatus.textContent = "● ACTIVE (" + topicDest + subInfo + ")";
+                } else {
+                    elements.topicSubscriberStatus.textContent = "● ACTIVE (" + topicDest + ")";
+                }
+
+                // Lock inputs while active
+                if (elements.subModeNonDurable) elements.subModeNonDurable.disabled = true;
+                if (elements.subModeDurable) elements.subModeDurable.disabled = true;
+                if (elements.topicClientId) elements.topicClientId.disabled = true;
+                if (elements.topicSubName) elements.topicSubName.disabled = true;
+            } else {
+                elements.btnToggleTopicListener.className = "btn btn-outline";
+                elements.btnToggleTopicListener.textContent = "▶ Start Topic Subscriber";
+                elements.topicSubscriberStatus.className = "subscriber-live-tag inactive";
+                elements.topicSubscriberStatus.textContent = "○ INACTIVE";
+
+                // Re-enable inputs
+                if (elements.subModeNonDurable) elements.subModeNonDurable.disabled = false;
+                if (elements.subModeDurable) elements.subModeDurable.disabled = false;
+                if (elements.topicClientId) elements.topicClientId.disabled = false;
+                if (elements.topicSubName) elements.topicSubName.disabled = false;
+            }
         }
     }
 
@@ -535,35 +782,262 @@
 
     // Topic Studio Operations
     function setupTopicEvents() {
+        if (elements.presetTopicDest) {
+            elements.presetTopicDest.addEventListener("change", function () {
+                if (elements.presetTopicDest.value) {
+                    elements.topicDestJndi.value = elements.presetTopicDest.value;
+                    if (elements.topicSubDestJndi) {
+                        elements.topicSubDestJndi.value = elements.presetTopicDest.value;
+                    }
+                    elements.presetTopicDest.value = "";
+                    updateListenerUI();
+                }
+            });
+        }
+
+        if (elements.topicDestJndi) {
+            elements.topicDestJndi.addEventListener("input", function () {
+                if (elements.topicSubDestJndi) {
+                    elements.topicSubDestJndi.value = elements.topicDestJndi.value;
+                }
+            });
+        }
+
+        if (elements.topicSubDestJndi) {
+            elements.topicSubDestJndi.addEventListener("input", function () {
+                updateListenerUI();
+            });
+        }
+
+        // Publish Single
         elements.formPublishTopic.addEventListener("submit", function (e) {
             e.preventDefault();
+            publishTopicMessage(1);
+        });
 
-            const payload = elements.topicPayload.value;
-            const priority = parseInt(elements.topicPriority.value, 10) || 4;
-            const ttl = parseInt(elements.topicTtl.value, 10) || 0;
-            const correlationId = elements.topicCorrelation.value.trim();
+        // Batch Publish 5x
+        if (elements.btnPublishTopicBatch) {
+            elements.btnPublishTopicBatch.addEventListener("click", function () {
+                publishTopicMessage(5);
+            });
+        }
 
-            const reqData = {
-                cfJndi: elements.inputCfJndi.value.trim(),
-                destJndi: elements.inputDestJndi.value.trim(),
-                payload: payload,
-                priority: priority,
-                timeToLive: ttl,
-                correlationId: correlationId
-            };
+        // Toggle Topic Listener
+        if (elements.btnToggleTopicListener) {
+            elements.btnToggleTopicListener.addEventListener("click", function () {
+                toggleTopicListener();
+            });
+        }
 
-            fetchApi("/api/jms/topic/publish", "POST", reqData)
-                .then(function (res) {
-                    if (res.success) {
-                        showToast("Published broadcast message: " + res.messageId, "success");
-                        fetchActivities();
-                    } else {
-                        showToast("Failed to publish: " + res.error, "error");
-                    }
+        // Subscription Mode Radio Toggle (Non-Durable vs Durable)
+        function updateDurableModeVisibility() {
+            const isDurable = elements.subModeDurable && elements.subModeDurable.checked;
+            if (elements.durableOptionsBox) {
+                if (isDurable) {
+                    elements.durableOptionsBox.classList.remove("hidden");
+                } else {
+                    elements.durableOptionsBox.classList.add("hidden");
+                }
+            }
+            if (elements.topicListenerDesc) {
+                if (isDurable) {
+                    elements.topicListenerDesc.textContent = "Registers a durable subscription in JEUS with ClientID & Sub Name. JEUS buffers broadcast messages even when subscriber is offline.";
+                } else {
+                    elements.topicListenerDesc.textContent = "Attaches a live JMS MessageListener to receive topic broadcast events in real-time.";
+                }
+            }
+        }
+
+        if (elements.subModeNonDurable) {
+            elements.subModeNonDurable.addEventListener("change", updateDurableModeVisibility);
+        }
+        if (elements.subModeDurable) {
+            elements.subModeDurable.addEventListener("change", updateDurableModeVisibility);
+        }
+
+        // Unsubscribe Button
+        if (elements.btnTopicUnsubscribe) {
+            elements.btnTopicUnsubscribe.addEventListener("click", function () {
+                const cfJndi = elements.inputCfJndi.value.trim();
+                const clientId = elements.topicClientId ? elements.topicClientId.value.trim() : "JmsStudioClient-01";
+                const subName = elements.topicSubName ? elements.topicSubName.value.trim() : "TopicSub-01";
+
+                if (!clientId || !subName) {
+                    showToast("Please provide both ClientID and Subscription Name to unsubscribe.", "error");
+                    return;
+                }
+
+                if (!confirm("Are you sure you want to unsubscribe '" + subName + "' (ClientID: '" + clientId + "')? JEUS will discard any buffered messages for this subscriber.")) {
+                    return;
+                }
+
+                fetchApi("/api/jms/topic/unsubscribe", "POST", {
+                    cfJndi: cfJndi,
+                    clientId: clientId,
+                    subscriptionName: subName
                 })
-                .catch(function (err) {
-                    showToast("Publish error: " + err.message, "error");
+                    .then(function (res) {
+                        if (res.success) {
+                            showToast(res.message || "Durable subscription unsubscribed successfully.", "success");
+                            fetchStatus();
+                            fetchActivities();
+                        } else {
+                            showToast("Failed to unsubscribe: " + res.error, "error");
+                        }
+                    })
+                    .catch(function (err) {
+                        showToast("Unsubscribe error: " + err.message, "error");
+                    });
+            });
+        }
+
+        // Clear Topic Events View
+        if (elements.btnClearTopicView) {
+            elements.btnClearTopicView.addEventListener("click", function () {
+                if (!state.clearedTopicEventIds) {
+                    state.clearedTopicEventIds = new Set();
+                }
+                const currentActivities = state.lastActivities || [];
+                currentActivities.forEach(function (act) {
+                    state.clearedTopicEventIds.add(act.id);
+                    if (act.timestamp && (!state.topicClearedTimestamp || act.timestamp > state.topicClearedTimestamp)) {
+                        state.topicClearedTimestamp = act.timestamp;
+                    }
                 });
+
+                const now = new Date();
+                const pad = function (n, z) { z = z || 2; return ('00' + n).slice(-z); };
+                const nowStr = now.getFullYear() + '-' +
+                    pad(now.getMonth() + 1) + '-' +
+                    pad(now.getDate()) + ' ' +
+                    pad(now.getHours()) + ':' +
+                    pad(now.getMinutes()) + ':' +
+                    pad(now.getSeconds()) + '.' +
+                    pad(now.getMilliseconds(), 3);
+                if (!state.topicClearedTimestamp || nowStr > state.topicClearedTimestamp) {
+                    state.topicClearedTimestamp = nowStr;
+                }
+
+                renderTopicEventsTable([]);
+                showToast("Cleared Topic broadcast events view.", "info");
+            });
+        }
+
+        // Reload Topic Events from History
+        if (elements.btnLoadTopicHistory) {
+            elements.btnLoadTopicHistory.addEventListener("click", function () {
+                if (state.clearedTopicEventIds) {
+                    state.clearedTopicEventIds.clear();
+                }
+                state.topicClearedTimestamp = null;
+                updateTopicEventsFromActivities(state.lastActivities || []);
+                showToast("Loaded broadcast events from history.", "info");
+            });
+        }
+    }
+
+    function publishTopicMessage(count) {
+        const payload = elements.topicPayload.value;
+        const priority = parseInt(elements.topicPriority.value, 10) || 4;
+        const ttl = parseInt(elements.topicTtl.value, 10) || 0;
+        const correlationId = elements.topicCorrelation.value.trim();
+        const topicDest = (elements.topicDestJndi ? elements.topicDestJndi.value.trim() : "") || elements.inputDestJndi.value.trim() || "ExamplesTopic";
+        const properties = collectTopicProperties();
+
+        const reqData = {
+            cfJndi: elements.inputCfJndi.value.trim(),
+            destJndi: topicDest,
+            payload: payload,
+            priority: priority,
+            timeToLive: ttl,
+            correlationId: correlationId,
+            properties: properties,
+            count: count
+        };
+
+        fetchApi("/api/jms/topic/publish", "POST", reqData)
+            .then(function (res) {
+                if (res.success) {
+                    if (count > 1) {
+                        showToast("Successfully broadcast " + res.publishedCount + " messages to topic.", "success");
+                    } else {
+                        showToast("Published broadcast message: " + (res.messageId || "OK"), "success");
+                    }
+                    fetchActivities();
+                } else {
+                    showToast("Failed to publish: " + res.error, "error");
+                }
+            })
+            .catch(function (err) {
+                showToast("Publish error: " + err.message, "error");
+            });
+    }
+
+    function updateTopicEventsFromActivities(activities) {
+        if (!elements.topicEventsTableBody) return;
+
+        const topicSubDest = (elements.topicSubDestJndi ? elements.topicSubDestJndi.value.trim() : "ExamplesTopic");
+        const topicEvents = activities.filter(function (act) {
+            if (act.action !== "TOPIC_RECV") return false;
+            if (topicSubDest && act.destination !== topicSubDest) return false;
+            if (state.clearedTopicEventIds && state.clearedTopicEventIds.has(act.id)) return false;
+            if (state.topicClearedTimestamp && act.timestamp <= state.topicClearedTimestamp) return false;
+            return true;
+        });
+
+        renderTopicEventsTable(topicEvents);
+    }
+
+    function renderTopicEventsTable(messages) {
+        if (!elements.topicEventsTableBody) return;
+        elements.topicEventsTableBody.replaceChildren();
+        if (elements.topicEventsCountLabel) {
+            elements.topicEventsCountLabel.textContent = "Received Broadcast Events (" + messages.length + " events)";
+        }
+
+        if (messages.length === 0) {
+            const tr = document.createElement("tr");
+            tr.className = "empty-row";
+            const td = document.createElement("td");
+            td.setAttribute("colspan", "5");
+            td.textContent = "No broadcast events received yet. Start the Topic Subscriber above and publish messages!";
+            tr.appendChild(td);
+            elements.topicEventsTableBody.appendChild(tr);
+            return;
+        }
+
+        messages.forEach(function (msg) {
+            const tr = document.createElement("tr");
+
+            const tdId = document.createElement("td");
+            tdId.className = "mono-cell";
+            tdId.textContent = truncate(msg.messageId, 24);
+
+            const tdTime = document.createElement("td");
+            tdTime.textContent = msg.timestamp;
+
+            const tdPriority = document.createElement("td");
+            tdPriority.textContent = msg.priority;
+
+            const tdProps = document.createElement("td");
+            tdProps.className = "mono-cell";
+            tdProps.textContent = formatPropsSummary(msg.properties);
+
+            const tdPayload = document.createElement("td");
+            tdPayload.className = "mono-cell";
+            tdPayload.textContent = truncate(msg.payload, 40);
+
+            tr.appendChild(tdId);
+            tr.appendChild(tdTime);
+            tr.appendChild(tdPriority);
+            tr.appendChild(tdProps);
+            tr.appendChild(tdPayload);
+
+            tr.addEventListener("click", function () {
+                openMessageModal(msg);
+            });
+
+            elements.topicEventsTableBody.appendChild(tr);
         });
     }
 
@@ -576,6 +1050,9 @@
         elements.btnClearActivities.addEventListener("click", function () {
             fetchApi("/api/jms/activities/clear", "POST", {})
                 .then(function () {
+                    state.lastActivities = [];
+                    if (state.clearedTopicEventIds) state.clearedTopicEventIds.clear();
+                    state.topicClearedTimestamp = null;
                     fetchActivities();
                     showToast("Activity history cleared.", "info");
                 });
@@ -606,6 +1083,8 @@
                 if (res.success) {
                     state.listenerRunning = res.listenerRunning;
                     state.listeningDest = res.listeningDestination;
+                    state.activeDestinations = res.activeDestinations || [];
+                    state.activeListenersMap = res.activeListenersMap || {};
                     updateListenerUI();
                 }
             })
@@ -616,7 +1095,10 @@
         fetchApi("/api/jms/activities", "GET")
             .then(function (res) {
                 if (res.success) {
-                    renderActivityTable(res.activities || []);
+                    const activities = res.activities || [];
+                    state.lastActivities = activities;
+                    renderActivityTable(activities);
+                    updateTopicEventsFromActivities(activities);
                 }
             })
             .catch(function () {});

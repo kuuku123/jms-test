@@ -213,12 +213,25 @@
         <!-- Tab 2: Topic Studio -->
         <section id="tab-topic" class="tab-pane">
             <div class="dashboard-grid">
+                <!-- Publisher Card -->
                 <div class="card">
                     <div class="card-header">
                         <h3>Publisher: Broadcast to Topic</h3>
                         <span class="card-tag">Publish / Subscribe</span>
                     </div>
                     <form id="form-publish-topic" class="card-body">
+                        <div class="form-group">
+                            <label for="topic-dest-jndi">Topic Destination JNDI</label>
+                            <div class="input-with-presets">
+                                <input type="text" id="topic-dest-jndi" value="ExamplesTopic" placeholder="e.g. ExamplesTopic">
+                                <select id="preset-topic-dest" class="preset-select" title="Select topic preset">
+                                    <option value="">Presets...</option>
+                                    <option value="ExamplesTopic">ExamplesTopic (Default)</option>
+                                    <option value="jms/TestTopic">jms/TestTopic</option>
+                                </select>
+                            </div>
+                        </div>
+
                         <div class="form-group">
                             <label for="topic-payload">Broadcast Event Payload</label>
                             <textarea id="topic-payload" rows="5" placeholder="Type notification or broadcast message...">{
@@ -244,30 +257,143 @@
                             </div>
                         </div>
 
+                        <!-- Custom Message Properties for Topic -->
+                        <div class="properties-section">
+                            <div class="properties-header">
+                                <label>Custom Message Properties (SQL-92 filterable headers)</label>
+                                <button type="button" id="btn-add-topic-property" class="btn btn-sm btn-ghost">+ Add Property</button>
+                            </div>
+                            <div id="topic-properties-container" class="properties-container">
+                                <!-- Dynamic key-value pairs -->
+                            </div>
+                        </div>
+
                         <div class="form-actions">
                             <button type="submit" id="btn-publish-topic" class="btn btn-primary">Publish to Topic</button>
+                            <button type="button" id="btn-publish-topic-batch" class="btn btn-accent">Batch Publish (5x)</button>
                         </div>
                     </form>
                 </div>
 
+                <!-- Subscriber Card -->
                 <div class="card">
                     <div class="card-header">
-                        <h3>Understanding Topic vs Queue</h3>
-                        <span class="card-tag">Concept</span>
+                        <div class="title-with-badge">
+                            <h3>Subscriber: Dynamic Topic Subscriber</h3>
+                            <span id="topic-subscriber-status" class="subscriber-live-tag inactive">○ Inactive</span>
+                        </div>
+                        <span class="card-tag">Real-Time Listener</span>
                     </div>
-                    <div class="card-body concept-body">
-                        <div class="concept-item">
-                            <h4>Point-to-Point (Queue)</h4>
-                            <p>Each message is delivered to <strong>exactly one consumer</strong>. Messages remain buffered in the JEUS queue until a consumer acknowledges them or they expire.</p>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label for="topic-sub-dest-jndi">Topic Destination JNDI (Subscribe Target)</label>
+                            <input type="text" id="topic-sub-dest-jndi" value="ExamplesTopic" placeholder="e.g. ExamplesTopic">
                         </div>
-                        <div class="concept-item">
-                            <h4>Publish/Subscribe (Topic)</h4>
-                            <p>Each message is broadcast to <strong>all active subscribers</strong> listening to the topic at that instant. If there are no subscribers, the message is dropped unless a <em>Durable Subscription</em> is registered.</p>
+
+                        <!-- Message Selector -->
+                        <div class="form-group">
+                            <label for="topic-selector">Message Selector (Optional SQL-92 filter)</label>
+                            <input type="text" id="topic-selector" placeholder="e.g. symbol = 'TMAX' AND price >= 40000">
                         </div>
-                        <div class="concept-item">
-                            <h4>Testing Tip</h4>
-                            <p>Open two separate browser tabs with the <strong>Dynamic Background Listener</strong> running on the same Queue to watch load balancing in action!</p>
+
+                        <!-- Subscription Mode: Non-Durable vs Durable -->
+                        <div class="form-group">
+                            <label>Subscription Mode</label>
+                            <div class="subscription-mode-toggle">
+                                <label class="radio-label">
+                                    <input type="radio" name="topic-sub-mode" id="sub-mode-nondurable" value="nondurable" checked>
+                                    <span><strong>Non-Durable</strong> (Live broadcast only, no offline buffering)</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="topic-sub-mode" id="sub-mode-durable" value="durable">
+                                    <span><strong>Durable Subscription</strong> (JEUS buffers messages while offline)</span>
+                                </label>
+                            </div>
                         </div>
+
+                        <!-- Durable Subscription Parameters -->
+                        <div id="durable-options-box" class="durable-config-box hidden">
+                            <div class="form-row">
+                                <div class="form-group flex-1">
+                                    <label for="topic-client-id">JMS ClientID <span class="required-star">*</span></label>
+                                    <input type="text" id="topic-client-id" value="JmsStudioClient-01" placeholder="e.g. JmsStudioClient-01">
+                                </div>
+                                <div class="form-group flex-1">
+                                    <label for="topic-sub-name">Subscription Name <span class="required-star">*</span></label>
+                                    <input type="text" id="topic-sub-name" value="TopicSub-01" placeholder="e.g. TopicSub-01">
+                                </div>
+                            </div>
+                            <div class="durable-actions-bar">
+                                <span class="helper-text-sm">Composite key in JEUS: <code>ClientID + SubscriptionName</code></span>
+                                <button type="button" id="btn-topic-unsubscribe" class="btn btn-sm btn-danger-outline" title="Delete this subscription and discard pending buffered messages from JEUS broker">
+                                    Deregister / Unsubscribe
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Dynamic Background Listener Toggle for Topic -->
+                        <div class="listener-box">
+                            <div class="listener-info">
+                                <strong id="topic-listener-title">Dynamic Background Subscriber</strong>
+                                <p id="topic-listener-desc">Attaches a live JMS MessageListener to receive topic broadcast events in real-time.</p>
+                            </div>
+                            <div class="listener-action">
+                                <button type="button" id="btn-toggle-topic-listener" class="btn btn-outline">
+                                    Start Topic Subscriber
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Topic Received Events Display -->
+                        <div class="browser-results-section">
+                            <div class="results-header">
+                                <span id="topic-events-count-label">Received Broadcast Events (0 events)</span>
+                                <div class="header-actions">
+                                    <button type="button" id="btn-load-topic-history" class="btn btn-sm btn-ghost" title="Reload past topic events from activity log">Load History</button>
+                                    <button type="button" id="btn-clear-topic-view" class="btn btn-sm btn-ghost">Clear View</button>
+                                </div>
+                            </div>
+                            <div id="topic-table-wrapper" class="table-wrapper">
+                                <table id="table-topic-events" class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Msg ID</th>
+                                            <th>Timestamp</th>
+                                            <th>Priority</th>
+                                            <th>Properties</th>
+                                            <th>Payload</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="topic-events-table-body">
+                                        <tr class="empty-row">
+                                            <td colspan="5">No broadcast events received yet. Start the Topic Subscriber above and publish messages!</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Full-width Pub/Sub Architecture Guide -->
+            <div class="card concept-banner-card">
+                <div class="card-header">
+                    <h3>Understanding Topic (Pub/Sub) vs Queue (Point-to-Point)</h3>
+                    <span class="card-tag">Architecture Guide</span>
+                </div>
+                <div class="concept-grid">
+                    <div class="concept-item">
+                        <h4>Point-to-Point (Queue)</h4>
+                        <p>Each message is delivered to <strong>exactly one consumer</strong>. Messages remain buffered in the JEUS queue until a consumer acknowledges them or they expire.</p>
+                    </div>
+                    <div class="concept-item">
+                        <h4>Publish / Subscribe (Topic)</h4>
+                        <p>Each message is broadcast to <strong>all active subscribers</strong> listening at that instant. If there are no subscribers, the message is dropped unless a durable subscription is registered.</p>
+                    </div>
+                    <div class="concept-item">
+                        <h4>Testing Tip</h4>
+                        <p>Open two separate browser tabs with the <strong>Dynamic Topic Subscriber</strong> running to watch both windows receive the exact same broadcast message simultaneously!</p>
                     </div>
                 </div>
             </div>
@@ -364,7 +490,7 @@
                     </div>
 
                     <div class="guide-step">
-                        <div class="step-num">6</div>
+                        <div class="step-num">5</div>
                         <div class="step-content">
                             <h4>Activate Changes</h4>
                             <p>Click the <strong>Lock &amp; Edit</strong> &rarr; <strong>Activate Changes</strong> button on the top-left of the WebAdmin console to apply changes to JEUS.</p>

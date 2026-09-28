@@ -65,6 +65,10 @@
     --action-async-color: #047857;
     --action-async-border: #a7f3d0;
 
+    --action-topic-bg: #fdf4ff;
+    --action-topic-color: #a21caf;
+    --action-topic-border: #f0abfc;
+
     --result-success-bg: #ecfdf5;
     --result-success-border: #a7f3d0;
     --result-success-color: #065f46;
@@ -148,6 +152,10 @@
     --action-async-bg: rgba(16, 185, 129, 0.25);
     --action-async-color: #34d399;
     --action-async-border: transparent;
+
+    --action-topic-bg: rgba(217, 70, 239, 0.2);
+    --action-topic-color: #e879f9;
+    --action-topic-border: transparent;
 
     --result-success-bg: rgba(16, 185, 129, 0.15);
     --result-success-border: rgba(16, 185, 129, 0.4);
@@ -632,6 +640,12 @@ textarea:focus {
     color: var(--text-secondary);
 }
 
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 /* Tables */
 .table-wrapper {
     overflow-x: auto;
@@ -710,6 +724,7 @@ textarea:focus {
 .action-BROWSE { background: var(--action-browse-bg); color: var(--action-browse-color); border: 1px solid var(--action-browse-border); }
 .action-PUBLISH { background: var(--action-pub-bg); color: var(--action-pub-color); border: 1px solid var(--action-pub-border); }
 .action-ASYNC_RECV { background: var(--action-async-bg); color: var(--action-async-color); border: 1px solid var(--action-async-border); }
+.action-TOPIC_RECV { background: var(--action-topic-bg); color: var(--action-topic-color); border: 1px solid var(--action-topic-border); }
 
 .mono-cell {
     font-family: var(--font-mono);
@@ -977,4 +992,127 @@ textarea:focus {
     color: var(--text-secondary);
     cursor: pointer;
 }
+
+/* Topic Subscriber Status Tag */
+.subscriber-live-tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    margin-left: 8px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    vertical-align: middle;
+}
+
+.subscriber-live-tag.active {
+    background-color: var(--badge-active-bg);
+    color: var(--badge-active-color);
+    border: 1px solid var(--badge-active-border);
+}
+
+.subscriber-live-tag.inactive {
+    background-color: rgba(148, 163, 184, 0.15);
+    color: var(--text-muted);
+    border: 1px solid var(--border-color);
+}
+
+/* Full Width Concept Banner Card & Grid */
+.concept-banner-card {
+    margin-top: 12px;
+}
+
+.concept-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 18px;
+    padding: 22px 24px;
+}
+
+.title-with-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Subscription Mode Radio Toggle */
+.subscription-mode-toggle {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.radio-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13.5px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.radio-label input[type="radio"] {
+    cursor: pointer;
+    accent-color: var(--color-primary);
+}
+
+.durable-config-box {
+    background-color: var(--bg-surface-elevated);
+    border: 1px dashed var(--color-primary);
+    border-radius: var(--radius-md);
+    padding: 16px 18px;
+    margin-bottom: 16px;
+    animation: fadeIn 0.2s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.required-star {
+    color: var(--color-danger);
+    font-weight: 700;
+}
+
+.durable-actions-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+.helper-text-sm {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.helper-text-sm code {
+    font-family: var(--font-mono);
+    color: var(--color-primary);
+}
+
+.btn-danger-outline {
+    background: transparent;
+    color: var(--color-danger);
+    border: 1px solid var(--color-danger);
+    padding: 4px 10px;
+    font-size: 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+
+.btn-danger-outline:hover {
+    background: var(--color-danger);
+    color: #ffffff;
+}
+
+
+
 

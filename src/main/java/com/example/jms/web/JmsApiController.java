@@ -43,7 +43,7 @@ public class JmsApiController extends HttpServlet {
 
         try {
             if ("/status".equals(path)) {
-                handleStatus(resp);
+                handleStatus(req, resp);
             } else if ("/activities".equals(path)) {
                 handleGetActivities(resp);
             } else if ("/queue/browse".equals(path)) {
@@ -74,7 +74,9 @@ public class JmsApiController extends HttpServlet {
             } else if ("/listener/start".equals(path)) {
                 handleStartListener(req, resp);
             } else if ("/listener/stop".equals(path)) {
-                handleStopListener(resp);
+                handleStopListener(req, resp);
+            } else if ("/topic/unsubscribe".equals(path)) {
+                handleUnsubscribeTopic(req, resp);
             } else if ("/activities/clear".equals(path)) {
                 handleClearActivities(resp);
             } else {
@@ -86,14 +88,38 @@ public class JmsApiController extends HttpServlet {
         }
     }
 
-    private void handleStatus(HttpServletResponse resp) throws IOException {
+    private void handleStatus(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         DynamicAsyncListenerService listener = DynamicAsyncListenerService.getInstance();
+        JsonArrayBuilder activeDests = Json.createArrayBuilder();
+        for (String dest : listener.getActiveDestinations()) {
+            activeDests.add(dest);
+        }
+
         JsonObjectBuilder builder = Json.createObjectBuilder()
                 .add("success", true)
                 .add("listenerRunning", listener.isRunning())
                 .add("listeningDestination", listener.getCurrentDestination() != null ? listener.getCurrentDestination() : "")
+                .add("activeDestinations", activeDests)
                 .add("defaultCf", DEFAULT_CF)
-                .add("defaultQueue", DEFAULT_QUEUE);
+                .add("defaultQueue", DEFAULT_QUEUE)
+                .add("defaultTopic", "ExamplesTopic");
+
+        JsonObjectBuilder listenersObj = Json.createObjectBuilder();
+        for (Map.Entry<String, DynamicAsyncListenerService.ActiveListenerContext> entry : listener.getActiveListeners().entrySet()) {
+            DynamicAsyncListenerService.ActiveListenerContext c = entry.getValue();
+            listenersObj.add(entry.getKey(), Json.createObjectBuilder()
+                    .add("destType", c.getDestType())
+                    .add("durable", c.isDurable())
+                    .add("clientId", c.getClientId() != null ? c.getClientId() : "")
+                    .add("subscriptionName", c.getSubscriptionName() != null ? c.getSubscriptionName() : "")
+                    .add("selector", c.getSelector() != null ? c.getSelector() : ""));
+        }
+        builder.add("activeListenersMap", listenersObj);
+
+        String checkDest = req.getParameter("destJndi");
+        if (checkDest != null && !checkDest.trim().isEmpty()) {
+            builder.add("isDestListening", listener.isRunning(checkDest.trim()));
+        }
 
         writeJson(resp, builder.build());
     }
@@ -226,21 +252,29 @@ public class JmsApiController extends HttpServlet {
     private void handlePublishTopic(HttpServletRequest req, HttpServletResponse resp) throws Exception {
         JsonObject body = parseJsonBody(req);
         String cfJndi = sanitizeJndi(body.getString("cfJndi", DEFAULT_CF));
-        String topicJndi = sanitizeJndi(body.getString("destJndi", "jms/TestTopic"));
+        String topicJndi = sanitizeJndi(body.getString("destJndi", "ExamplesTopic"));
         String payload = body.getString("payload", "Broadcast event from JEUS JMS Console");
         int priority = body.getInt("priority", 4);
         long ttl = body.getInt("timeToLive", 0);
         String corrId = body.getString("correlationId", "");
+        int count = body.getInt("count", 1);
 
         Map<String, String> properties = parseProperties(body);
 
-        String msgId = JmsService.getInstance().publishTopicMessage(
-                cfJndi, topicJndi, payload, priority, ttl, corrId, properties
+        List<String> msgIds = JmsService.getInstance().publishTopicMessage(
+                cfJndi, topicJndi, payload, priority, ttl, corrId, properties, count
         );
+
+        JsonArrayBuilder idsArray = Json.createArrayBuilder();
+        for (String id : msgIds) {
+            idsArray.add(id);
+        }
 
         JsonObject responseObj = Json.createObjectBuilder()
                 .add("success", true)
-                .add("messageId", msgId)
+                .add("publishedCount", msgIds.size())
+                .add("messageIds", idsArray)
+                .add("messageId", msgIds.isEmpty() ? "" : msgIds.get(0))
                 .build();
 
         writeJson(resp, responseObj);
@@ -250,24 +284,63 @@ public class JmsApiController extends HttpServlet {
         JsonObject body = parseJsonBody(req);
         String cfJndi = sanitizeJndi(body.getString("cfJndi", DEFAULT_CF));
         String destJndi = sanitizeJndi(body.getString("destJndi", DEFAULT_QUEUE));
+        String selector = body.containsKey("selector") ? body.getString("selector") : null;
+        boolean durable = body.containsKey("durable") && body.getBoolean("durable");
+        String clientId = body.containsKey("clientId") ? sanitizeJndi(body.getString("clientId")) : "JmsStudioClient-01";
+        String subscriptionName = body.containsKey("subscriptionName") ? sanitizeJndi(body.getString("subscriptionName")) : "TopicSub-01";
 
-        DynamicAsyncListenerService.getInstance().start(cfJndi, destJndi);
+        DynamicAsyncListenerService.getInstance().start(cfJndi, destJndi, selector, durable, clientId, subscriptionName);
+
+        JsonArrayBuilder activeDests = Json.createArrayBuilder();
+        for (String dest : DynamicAsyncListenerService.getInstance().getActiveDestinations()) {
+            activeDests.add(dest);
+        }
 
         JsonObject responseObj = Json.createObjectBuilder()
                 .add("success", true)
                 .add("listenerRunning", true)
                 .add("listeningDestination", destJndi)
+                .add("activeDestinations", activeDests)
                 .build();
 
         writeJson(resp, responseObj);
     }
 
-    private void handleStopListener(HttpServletResponse resp) throws IOException {
-        DynamicAsyncListenerService.getInstance().stop();
+    private void handleStopListener(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        JsonObject body = parseJsonBody(req);
+        String destJndi = body.containsKey("destJndi") ? sanitizeJndi(body.getString("destJndi")) : "";
+
+        if (!destJndi.isEmpty()) {
+            DynamicAsyncListenerService.getInstance().stop(destJndi);
+        } else {
+            DynamicAsyncListenerService.getInstance().stop();
+        }
+
+        JsonArrayBuilder activeDests = Json.createArrayBuilder();
+        for (String dest : DynamicAsyncListenerService.getInstance().getActiveDestinations()) {
+            activeDests.add(dest);
+        }
 
         JsonObject responseObj = Json.createObjectBuilder()
                 .add("success", true)
-                .add("listenerRunning", false)
+                .add("listenerRunning", DynamicAsyncListenerService.getInstance().isRunning())
+                .add("activeDestinations", activeDests)
+                .build();
+
+        writeJson(resp, responseObj);
+    }
+
+    private void handleUnsubscribeTopic(HttpServletRequest req, HttpServletResponse resp) throws Exception {
+        JsonObject body = parseJsonBody(req);
+        String cfJndi = sanitizeJndi(body.getString("cfJndi", DEFAULT_CF));
+        String clientId = sanitizeJndi(body.getString("clientId", "JmsStudioClient-01"));
+        String subscriptionName = sanitizeJndi(body.getString("subscriptionName", "TopicSub-01"));
+
+        DynamicAsyncListenerService.getInstance().unsubscribeDurable(cfJndi, clientId, subscriptionName);
+
+        JsonObject responseObj = Json.createObjectBuilder()
+                .add("success", true)
+                .add("message", "Successfully unsubscribed durable subscription '" + subscriptionName + "' (ClientID: " + clientId + ") from JEUS.")
                 .build();
 
         writeJson(resp, responseObj);

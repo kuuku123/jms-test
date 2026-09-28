@@ -115,7 +115,15 @@ public class JmsService {
         try {
             ctx = new InitialContext();
             ConnectionFactory cf = (ConnectionFactory) ctx.lookup(cfJndi);
-            Queue queue = (Queue) ctx.lookup(queueJndi);
+
+            Object destObj = ctx.lookup(queueJndi);
+            if (destObj instanceof Topic) {
+                throw new IllegalArgumentException("Destination '" + queueJndi + "' is a Topic! Use Topic Studio to broadcast to topics.");
+            }
+            if (!(destObj instanceof Queue)) {
+                throw new IllegalArgumentException("Destination '" + queueJndi + "' is not a JMS Queue (Type: " + (destObj != null ? destObj.getClass().getName() : "null") + ")");
+            }
+            Queue queue = (Queue) destObj;
 
             conn = cf.createConnection();
             session = conn.createSession(false, Session.AUTO_ACKNOWLEDGE);
@@ -186,7 +194,15 @@ public class JmsService {
         try {
             ctx = new InitialContext();
             ConnectionFactory cf = (ConnectionFactory) ctx.lookup(cfJndi);
-            Queue queue = (Queue) ctx.lookup(queueJndi);
+
+            Object destObj = ctx.lookup(queueJndi);
+            if (destObj instanceof Topic) {
+                throw new IllegalArgumentException("Cannot browse a Topic (" + queueJndi + ")! JMS QueueBrowser only supports Point-to-Point Queues. To monitor topic messages in real-time, use the Dynamic Topic Subscriber in Topic Studio.");
+            }
+            if (!(destObj instanceof Queue)) {
+                throw new IllegalArgumentException("Destination '" + queueJndi + "' is not a JMS Queue (Type: " + (destObj != null ? destObj.getClass().getName() : "null") + ")");
+            }
+            Queue queue = (Queue) destObj;
 
             conn = cf.createConnection();
             session = conn.createSession(false, Session.AUTO_ACKNOWLEDGE);
@@ -253,7 +269,15 @@ public class JmsService {
         try {
             ctx = new InitialContext();
             ConnectionFactory cf = (ConnectionFactory) ctx.lookup(cfJndi);
-            Queue queue = (Queue) ctx.lookup(queueJndi);
+
+            Object destObj = ctx.lookup(queueJndi);
+            if (destObj instanceof Topic) {
+                throw new IllegalArgumentException("Cannot synchronously receive from a Topic (" + queueJndi + ") using Queue Consumer. In JMS Pub/Sub, start the Dynamic Topic Subscriber in Topic Studio before publishing messages.");
+            }
+            if (!(destObj instanceof Queue)) {
+                throw new IllegalArgumentException("Destination '" + queueJndi + "' is not a JMS Queue (Type: " + (destObj != null ? destObj.getClass().getName() : "null") + ")");
+            }
+            Queue queue = (Queue) destObj;
 
             conn = cf.createConnection();
             conn.start(); // Required to start delivery of messages!
@@ -318,19 +342,32 @@ public class JmsService {
     }
 
     /**
-     * Publish a message to a Topic.
+     * Publish one or more messages to a Topic.
      */
-    public String publishTopicMessage(String cfJndi, String topicJndi, String text, int priority,
-                                      long timeToLive, String correlationId, Map<String, String> properties) throws Exception {
+    public List<String> publishTopicMessage(String cfJndi, String topicJndi, String text, int priority,
+                                            long timeToLive, String correlationId, Map<String, String> properties,
+                                            int count) throws Exception {
+        if (count < 1) count = 1;
+        if (count > 50) count = 50;
+
         InitialContext ctx = null;
         Connection conn = null;
         Session session = null;
         MessageProducer producer = null;
+        List<String> sentMessageIds = new ArrayList<>();
 
         try {
             ctx = new InitialContext();
             ConnectionFactory cf = (ConnectionFactory) ctx.lookup(cfJndi);
-            Topic topic = (Topic) ctx.lookup(topicJndi);
+
+            Object destObj = ctx.lookup(topicJndi);
+            if (!(destObj instanceof Topic)) {
+                if (destObj instanceof Queue) {
+                    throw new IllegalArgumentException("Destination '" + topicJndi + "' is a Queue, not a Topic! Use Queue Studio to send to queues.");
+                }
+                throw new IllegalArgumentException("Destination '" + topicJndi + "' is not a JMS Topic (Type: " + (destObj != null ? destObj.getClass().getName() : "null") + ")");
+            }
+            Topic topic = (Topic) destObj;
 
             conn = cf.createConnection();
             session = conn.createSession(false, Session.AUTO_ACKNOWLEDGE);
@@ -343,31 +380,36 @@ public class JmsService {
                 producer.setTimeToLive(timeToLive);
             }
 
-            TextMessage message = session.createTextMessage(text);
-            if (correlationId != null && !correlationId.trim().isEmpty()) {
-                message.setJMSCorrelationID(correlationId.trim());
-            }
+            for (int i = 1; i <= count; i++) {
+                String payload = (count == 1) ? text : text + " [#" + i + "]";
+                TextMessage message = session.createTextMessage(payload);
 
-            if (properties != null) {
-                for (Map.Entry<String, String> entry : properties.entrySet()) {
-                    String key = entry.getKey().trim();
-                    String val = entry.getValue() != null ? entry.getValue().trim() : "";
-                    if (!key.isEmpty()) {
-                        message.setStringProperty(key, val);
+                if (correlationId != null && !correlationId.trim().isEmpty()) {
+                    message.setJMSCorrelationID((count == 1) ? correlationId.trim() : correlationId.trim() + "-" + i);
+                }
+
+                if (properties != null) {
+                    for (Map.Entry<String, String> entry : properties.entrySet()) {
+                        String key = entry.getKey().trim();
+                        String val = entry.getValue() != null ? entry.getValue().trim() : "";
+                        if (!key.isEmpty()) {
+                            message.setStringProperty(key, val);
+                        }
                     }
                 }
+
+                producer.send(message);
+                String msgId = message.getJMSMessageID();
+                sentMessageIds.add(msgId);
+
+                MessageActivityStore.getInstance().record(new ActivityRecord(
+                        "PUBLISH", topicJndi, msgId, message.getJMSCorrelationID(),
+                        message.getJMSPriority(), properties, payload, "SUCCESS",
+                        "Broadcast to topic (TTL: " + timeToLive + "ms)"
+                ));
             }
 
-            producer.send(message);
-            String msgId = message.getJMSMessageID();
-
-            MessageActivityStore.getInstance().record(new ActivityRecord(
-                    "PUBLISH", topicJndi, msgId, message.getJMSCorrelationID(),
-                    message.getJMSPriority(), properties, text, "SUCCESS",
-                    "Broadcast to topic (TTL: " + timeToLive + "ms)"
-            ));
-
-            return msgId;
+            return sentMessageIds;
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "Failed to publish to topic: " + topicJndi, e);
             MessageActivityStore.getInstance().record(new ActivityRecord(
@@ -381,6 +423,15 @@ public class JmsService {
             closeQuietly(conn);
             closeContext(ctx);
         }
+    }
+
+    /**
+     * Convenience method to publish a single message to a Topic.
+     */
+    public String publishTopicMessage(String cfJndi, String topicJndi, String text, int priority,
+                                      long timeToLive, String correlationId, Map<String, String> properties) throws Exception {
+        List<String> ids = publishTopicMessage(cfJndi, topicJndi, text, priority, timeToLive, correlationId, properties, 1);
+        return ids.isEmpty() ? null : ids.get(0);
     }
 
     public static Map<String, String> extractProperties(Message message) {
