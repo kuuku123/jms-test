@@ -437,6 +437,113 @@ public class JmsService {
     }
 
     /**
+     * Synchronously receive and consume all available messages from a queue (up to maxCount).
+     */
+    public List<BrowsedMessage> receiveAllQueueMessages(String cfJndi, String queueJndi, int maxCount, long timeoutMillis, String selector) throws Exception {
+        InitialContext ctx = null;
+        Connection conn = null;
+        Session session = null;
+        MessageConsumer consumer = null;
+        List<BrowsedMessage> receivedList = new ArrayList<>();
+
+        try {
+            ctx = new InitialContext();
+            ConnectionFactory cf = (ConnectionFactory) ctx.lookup(cfJndi);
+
+            Object destObj = ctx.lookup(queueJndi);
+            if (destObj instanceof Topic) {
+                throw new IllegalArgumentException("Cannot synchronously receive from a Topic (" + queueJndi + ") using Queue Consumer. In JMS Pub/Sub, start the Dynamic Topic Subscriber in Topic Studio before publishing messages.");
+            }
+            if (!(destObj instanceof Queue)) {
+                throw new IllegalArgumentException("Destination '" + queueJndi + "' is not a JMS Queue (Type: " + (destObj != null ? destObj.getClass().getName() : "null") + ")");
+            }
+            Queue queue = (Queue) destObj;
+
+            conn = cf.createConnection();
+            conn.start(); // Required to start delivery of messages!
+
+            session = conn.createSession(false, Session.AUTO_ACKNOWLEDGE);
+
+            if (selector != null && !selector.trim().isEmpty()) {
+                consumer = session.createConsumer(queue, selector.trim());
+            } else {
+                consumer = session.createConsumer(queue);
+            }
+
+            int limit = (maxCount > 0) ? Math.min(maxCount, 2000) : 1000;
+            long initialTimeout = (timeoutMillis > 0) ? timeoutMillis : 1500;
+
+            // First receive with initial wait timeout
+            Message msg = consumer.receive(initialTimeout);
+            while (msg != null && receivedList.size() < limit) {
+                Map<String, String> props = extractProperties(msg);
+                String payload = extractPayload(msg);
+
+                BrowsedMessage received = new BrowsedMessage(
+                        msg.getJMSMessageID(),
+                        msg.getJMSCorrelationID(),
+                        msg.getJMSTimestamp(),
+                        msg.getJMSPriority(),
+                        msg.getJMSDeliveryMode(),
+                        msg.getJMSExpiration(),
+                        msg.getJMSRedelivered(),
+                        props,
+                        payload
+                );
+                receivedList.add(received);
+
+                // Drain subsequent messages with short wait (150ms) to allow broker prefetch
+                if (receivedList.size() < limit) {
+                    msg = consumer.receive(150);
+                } else {
+                    break;
+                }
+            }
+
+            if (!receivedList.isEmpty()) {
+                int totalConsumed = receivedList.size();
+                // Record individual activities (up to 50 to prevent overflow in circular buffer)
+                int recordLimit = Math.min(totalConsumed, 50);
+                for (int i = 0; i < recordLimit; i++) {
+                    BrowsedMessage m = receivedList.get(i);
+                    MessageActivityStore.getInstance().record(new ActivityRecord(
+                            "RECEIVE", queueJndi, m.getMessageId(), m.getCorrelationId(),
+                            m.getPriority(), m.getProperties(), m.getPayload(), "SUCCESS",
+                            "Bulk consumed (" + (i + 1) + " of " + totalConsumed + ")"
+                    ));
+                }
+
+                // Summary activity
+                String summaryDetails = "Drained and acknowledged " + totalConsumed + " message(s) from " + queueJndi
+                        + (selector != null && !selector.trim().isEmpty() ? " with selector [" + selector.trim() + "]" : "");
+                MessageActivityStore.getInstance().record(new ActivityRecord(
+                        "RECEIVE_ALL", queueJndi, "N/A", "", 0, null,
+                        "Batch consumed " + totalConsumed + " message(s)", "SUCCESS",
+                        summaryDetails
+                ));
+            } else {
+                MessageActivityStore.getInstance().record(new ActivityRecord(
+                        "RECEIVE", queueJndi, "N/A", "", 0, null, "", "EMPTY",
+                        "Queue empty or receive timeout (" + initialTimeout + "ms)"
+                ));
+            }
+
+            return receivedList;
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "Failed to batch receive from queue: " + queueJndi, e);
+            MessageActivityStore.getInstance().record(new ActivityRecord(
+                    "RECEIVE_ALL", queueJndi, "N/A", "", 0, null, "", "ERROR", e.getMessage()
+            ));
+            throw e;
+        } finally {
+            closeQuietly(consumer);
+            closeQuietly(session);
+            closeQuietly(conn);
+            closeContext(ctx);
+        }
+    }
+
+    /**
      * Publish one or more messages to a Topic.
      */
     public List<String> publishTopicMessage(String cfJndi, String topicJndi, String text, int priority,

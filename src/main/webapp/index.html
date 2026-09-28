@@ -237,11 +237,14 @@
                                 <input type="text" id="browser-selector" placeholder="e.g. orderType = 'VIP' AND JMSPriority >= 4">
                             </div>
                             <div class="button-cluster">
-                                <button type="button" id="btn-browse-queue" class="btn btn-secondary">
+                                <button type="button" id="btn-browse-queue" class="btn btn-secondary" title="Inspect pending messages in queue without consuming them">
                                     Browse Messages
                                 </button>
-                                <button type="button" id="btn-receive-queue" class="btn btn-warning">
-                                    Receive &amp; Consume
+                                <button type="button" id="btn-receive-queue" class="btn btn-warning" title="Synchronously consume 1 message from queue">
+                                    Receive 1 Message
+                                </button>
+                                <button type="button" id="btn-consume-all-queue" class="btn btn-danger" title="Consume and acknowledge all pending messages from this queue at once">
+                                    ⚡ Consume All Messages
                                 </button>
                             </div>
                         </div>
@@ -263,7 +266,12 @@
                         <div class="browser-results-section">
                             <div class="results-header">
                                 <span id="browse-count-label">Queue Inspection Results (0 messages)</span>
-                                <button type="button" id="btn-clear-browse-view" class="btn btn-sm btn-ghost">Clear View</button>
+                                <div class="results-header-actions">
+                                    <button type="button" id="btn-table-consume-all" class="btn btn-sm btn-danger" style="display: none;" title="Consume all browsed messages immediately">
+                                        ⚡ Consume All (<span id="table-consume-count">0</span>)
+                                    </button>
+                                    <button type="button" id="btn-clear-browse-view" class="btn btn-sm btn-ghost">Clear View</button>
+                                </div>
                             </div>
                             <div id="browse-table-wrapper" class="table-wrapper">
                                 <table id="table-browse" class="data-table">

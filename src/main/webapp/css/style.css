@@ -604,6 +604,13 @@ textarea:focus {
 .button-cluster {
     display: flex;
     gap: 12px;
+    flex-wrap: wrap;
+}
+
+.results-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .listener-box {
@@ -727,6 +734,14 @@ textarea:focus {
 .action-TOPIC_RECV { background: var(--action-topic-bg); color: var(--action-topic-color); border: 1px solid var(--action-topic-border); }
 .action-TX_COMMIT { background: rgba(16, 185, 129, 0.15); color: #059669; border: 1px solid rgba(16, 185, 129, 0.35); }
 .action-TX_ROLLBACK { background: rgba(239, 68, 68, 0.15); color: #dc2626; border: 1px solid rgba(239, 68, 68, 0.35); }
+.action-RECEIVE_ALL, .action-DRAIN { background: rgba(245, 158, 11, 0.15); color: #d97706; border: 1px solid rgba(245, 158, 11, 0.35); }
+
+.consumed-row {
+    background-color: rgba(239, 68, 68, 0.04);
+}
+.consumed-row:hover {
+    background-color: rgba(239, 68, 68, 0.08) !important;
+}
 
 .status-committed { background: #ecfdf5; color: #047857; }
 .status-rolled_back { background: #fef2f2; color: #b91c1c; }

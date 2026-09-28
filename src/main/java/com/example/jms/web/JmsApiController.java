@@ -74,6 +74,8 @@ public class JmsApiController extends HttpServlet {
                 handleTestTm(req, resp);
             } else if ("/queue/receive".equals(path)) {
                 handleReceiveQueue(req, resp);
+            } else if ("/queue/receive-all".equals(path) || "/queue/drain".equals(path)) {
+                handleReceiveAllQueue(req, resp);
             } else if ("/topic/publish".equals(path)) {
                 handlePublishTopic(req, resp);
             } else if ("/listener/start".equals(path)) {
@@ -328,6 +330,49 @@ public class JmsApiController extends HttpServlet {
         } else {
             responseBuilder.add("empty", true);
             responseBuilder.add("details", "Queue is empty or wait timed out (" + timeout + "ms)");
+        }
+
+        writeJson(resp, responseBuilder.build());
+    }
+
+    private void handleReceiveAllQueue(HttpServletRequest req, HttpServletResponse resp) throws Exception {
+        JsonObject body = parseJsonBody(req);
+        String cfJndi = sanitizeJndi(body.getString("cfJndi", DEFAULT_CF));
+        String destJndi = sanitizeJndi(body.getString("destJndi", DEFAULT_QUEUE));
+        int maxCount = body.getInt("maxCount", 1000);
+        long timeout = body.getInt("timeout", 1500);
+        String selector = body.getString("selector", "");
+
+        List<BrowsedMessage> messages = JmsService.getInstance().receiveAllQueueMessages(cfJndi, destJndi, maxCount, timeout, selector);
+
+        JsonObjectBuilder responseBuilder = Json.createObjectBuilder();
+        responseBuilder.add("success", true);
+        responseBuilder.add("count", messages.size());
+
+        if (!messages.isEmpty()) {
+            responseBuilder.add("empty", false);
+            responseBuilder.add("details", "Successfully consumed " + messages.size() + " message(s) from " + destJndi);
+            JsonArrayBuilder arr = Json.createArrayBuilder();
+            for (BrowsedMessage msg : messages) {
+                JsonObjectBuilder msgObj = Json.createObjectBuilder()
+                        .add("messageId", msg.getMessageId() != null ? msg.getMessageId() : "N/A")
+                        .add("correlationId", msg.getCorrelationId() != null ? msg.getCorrelationId() : "")
+                        .add("timestamp", msg.getTimestamp() != null ? msg.getTimestamp() : "")
+                        .add("priority", msg.getPriority())
+                        .add("payload", msg.getPayload() != null ? msg.getPayload() : "");
+
+                JsonObjectBuilder propsObj = Json.createObjectBuilder();
+                for (Map.Entry<String, String> entry : msg.getProperties().entrySet()) {
+                    propsObj.add(entry.getKey(), entry.getValue() != null ? entry.getValue() : "");
+                }
+                msgObj.add("properties", propsObj);
+                arr.add(msgObj);
+            }
+            responseBuilder.add("messages", arr);
+        } else {
+            responseBuilder.add("empty", true);
+            responseBuilder.add("details", "Queue is empty or wait timed out (" + timeout + "ms)");
+            responseBuilder.add("messages", Json.createArrayBuilder());
         }
 
         writeJson(resp, responseBuilder.build());

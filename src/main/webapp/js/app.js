@@ -58,6 +58,9 @@
         browserSelector: document.getElementById("browser-selector"),
         btnBrowseQueue: document.getElementById("btn-browse-queue"),
         btnReceiveQueue: document.getElementById("btn-receive-queue"),
+        btnConsumeAllQueue: document.getElementById("btn-consume-all-queue"),
+        btnTableConsumeAll: document.getElementById("btn-table-consume-all"),
+        tableConsumeCount: document.getElementById("table-consume-count"),
         btnToggleListener: document.getElementById("btn-toggle-listener"),
         browseCountLabel: document.getElementById("browse-count-label"),
         browseTableBody: document.getElementById("browse-table-body"),
@@ -497,10 +500,24 @@
             browseQueue();
         });
 
-        // Receive Message
+        // Receive Single Message
         elements.btnReceiveQueue.addEventListener("click", function () {
             receiveQueueMessage();
         });
+
+        // Consume All Messages (Drain)
+        if (elements.btnConsumeAllQueue) {
+            elements.btnConsumeAllQueue.addEventListener("click", function () {
+                consumeAllQueueMessages();
+            });
+        }
+
+        // Table Header Consume All Button
+        if (elements.btnTableConsumeAll) {
+            elements.btnTableConsumeAll.addEventListener("click", function () {
+                consumeAllQueueMessages();
+            });
+        }
 
         // Toggle Listener
         elements.btnToggleListener.addEventListener("click", function () {
@@ -511,6 +528,9 @@
         elements.btnClearBrowseView.addEventListener("click", function () {
             state.lastBrowsedMessages = [];
             renderBrowseTable([]);
+            if (elements.btnTableConsumeAll) {
+                elements.btnTableConsumeAll.style.display = "none";
+            }
         });
     }
 
@@ -698,6 +718,65 @@
             });
     }
 
+    function consumeAllQueueMessages() {
+        const destJndi = elements.inputDestJndi.value.trim();
+        const cfJndi = elements.inputCfJndi.value.trim();
+        const selector = elements.browserSelector.value.trim();
+
+        const btnMain = elements.btnConsumeAllQueue;
+        const btnTable = elements.btnTableConsumeAll;
+        const origMainText = btnMain ? btnMain.innerHTML : "";
+        const origTableText = btnTable ? btnTable.innerHTML : "";
+
+        if (btnMain) {
+            btnMain.disabled = true;
+            btnMain.innerHTML = "⏳ Consuming...";
+        }
+        if (btnTable) {
+            btnTable.disabled = true;
+            btnTable.innerHTML = "⏳ Consuming...";
+        }
+
+        const reqData = {
+            cfJndi: cfJndi,
+            destJndi: destJndi,
+            selector: selector,
+            maxCount: 1000,
+            timeout: 1500
+        };
+
+        showToast("Consuming all messages from " + destJndi + "...", "info");
+
+        fetchApi("/api/jms/queue/receive-all", "POST", reqData)
+            .then(function (res) {
+                if (res.success) {
+                    if (res.empty || res.count === 0) {
+                        showToast(res.details || ("Queue " + destJndi + " is empty (0 messages consumed)."), "info");
+                        browseQueue();
+                    } else {
+                        showToast("Successfully consumed all " + res.count + " messages from " + destJndi + "!", "success");
+                        renderConsumedTable(res.messages, destJndi);
+                    }
+                    fetchActivities();
+                } else {
+                    showToast("Failed to consume messages: " + (res.error || "Unknown error"), "error");
+                }
+            })
+            .catch(function (err) {
+                showToast("Consume request failed: " + err.message, "error");
+            })
+            .finally(function () {
+                if (btnMain) {
+                    btnMain.disabled = false;
+                    btnMain.innerHTML = origMainText;
+                }
+                if (btnTable) {
+                    btnTable.disabled = false;
+                    btnTable.innerHTML = origTableText;
+                }
+            });
+    }
+
     function toggleBackgroundListener() {
         const destJndi = elements.inputDestJndi.value.trim();
         const cfJndi = elements.inputCfJndi.value.trim();
@@ -868,6 +947,17 @@
         elements.browseTableBody.replaceChildren();
         elements.browseCountLabel.textContent = "Queue Inspection Results (" + messages.length + " messages)";
 
+        if (elements.btnTableConsumeAll) {
+            if (messages.length > 0) {
+                elements.btnTableConsumeAll.style.display = "inline-flex";
+                if (elements.tableConsumeCount) {
+                    elements.tableConsumeCount.textContent = messages.length;
+                }
+            } else {
+                elements.btnTableConsumeAll.style.display = "none";
+            }
+        }
+
         if (messages.length === 0) {
             const tr = document.createElement("tr");
             tr.className = "empty-row";
@@ -881,6 +971,50 @@
 
         messages.forEach(function (msg) {
             const tr = document.createElement("tr");
+
+            const tdId = document.createElement("td");
+            tdId.className = "mono-cell";
+            tdId.textContent = truncate(msg.messageId, 24);
+
+            const tdTime = document.createElement("td");
+            tdTime.textContent = msg.timestamp;
+
+            const tdPriority = document.createElement("td");
+            tdPriority.textContent = msg.priority;
+
+            const tdProps = document.createElement("td");
+            tdProps.className = "mono-cell";
+            tdProps.textContent = formatPropsSummary(msg.properties);
+
+            const tdPayload = document.createElement("td");
+            tdPayload.className = "mono-cell";
+            tdPayload.textContent = truncate(msg.payload, 40);
+
+            tr.appendChild(tdId);
+            tr.appendChild(tdTime);
+            tr.appendChild(tdPriority);
+            tr.appendChild(tdProps);
+            tr.appendChild(tdPayload);
+
+            tr.addEventListener("click", function () {
+                openMessageModal(msg);
+            });
+
+            elements.browseTableBody.appendChild(tr);
+        });
+    }
+
+    function renderConsumedTable(messages, destJndi) {
+        elements.browseTableBody.replaceChildren();
+        elements.browseCountLabel.textContent = "Consumed " + messages.length + " Message(s) from " + destJndi + " (Queue Drained)";
+        if (elements.btnTableConsumeAll) {
+            elements.btnTableConsumeAll.style.display = "none";
+        }
+        state.lastBrowsedMessages = [];
+
+        messages.forEach(function (msg) {
+            const tr = document.createElement("tr");
+            tr.className = "consumed-row";
 
             const tdId = document.createElement("td");
             tdId.className = "mono-cell";
