@@ -23,9 +23,7 @@ import javax.naming.InitialContext;
 import javax.naming.NameNotFoundException;
 import javax.naming.NamingException;
 import javax.transaction.Status;
-import javax.transaction.Transaction;
 import javax.transaction.TransactionManager;
-import javax.transaction.xa.XAResource;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -687,11 +685,9 @@ public class JmsService {
 
         InitialContext ctx = null;
         TransactionManager tm = null;
-        Connection conn = null;
         Session session = null;
         XAConnection xaConn = null;
         XASession xaSession = null;
-        XAResource xaRes = null;
         MessageProducer producer = null;
         List<String> stagedMsgIds = new ArrayList<>();
         Map<String, Object> result = new HashMap<>();
@@ -709,7 +705,6 @@ public class JmsService {
 
             // 2. Begin JTA Transaction
             tm.begin();
-            Transaction tx = tm.getTransaction();
 
             // 3. Lookup Queue Destination
             Object destObj = ctx.lookup(queueJndi);
@@ -765,15 +760,10 @@ public class JmsService {
 
             XAConnectionFactory xaCf = (XAConnectionFactory) cfObj;
             xaConn = xaCf.createXAConnection();
+            // In JEUS, createXASession() automatically detects the active thread's global transaction
+            // started by tm.begin() and enlists the XAResource into the TransactionManager Coordinator.
             xaSession = xaConn.createXASession();
             session = xaSession.getSession();
-            xaRes = xaSession.getXAResource();
-
-            if (tx != null && xaRes != null) {
-                tx.enlistResource(xaRes);
-            } else {
-                throw new IllegalStateException("Unable to enlist XAResource into JTA Transaction (tx=" + tx + ", xaRes=" + xaRes + ")");
-            }
 
             producer = session.createProducer(queue);
             if (priority >= 0 && priority <= 9) {
@@ -811,15 +801,6 @@ public class JmsService {
 
             // 6. Commit or Rollback according to simulateRollback flag
             if (simulateRollback) {
-                // Disassociate XAResource with TMFAIL before rollback so JEUS marks the branch aborted
-                if (xaRes != null && tx != null) {
-                    try {
-                        tx.delistResource(xaRes, XAResource.TMFAIL);
-                    } catch (Exception e) {
-                        LOGGER.log(Level.WARNING, "Warning during XAResource delist on rollback", e);
-                    }
-                }
-
                 tm.rollback();
 
                 String desc = "[JTA Rollback via " + tmJndi + "] Rolled back " + count + " staged message(s) via " + effectiveCfJndi + ". None persisted to queue.";
@@ -837,15 +818,6 @@ public class JmsService {
                 result.put("messageIds", stagedMsgIds);
                 result.put("message", "Simulated rollback successful! tm.rollback() was invoked on " + tmJndi + " using " + effectiveCfJndi + ". " + count + " staged messages were discarded; 0 messages persisted to " + queueJndi + ".");
             } else {
-                // Disassociate XAResource with TMSUCCESS before commit so JEUS marks the branch ready to commit
-                if (xaRes != null && tx != null) {
-                    try {
-                        tx.delistResource(xaRes, XAResource.TMSUCCESS);
-                    } catch (Exception e) {
-                        LOGGER.log(Level.WARNING, "Warning during XAResource delist on commit", e);
-                    }
-                }
-
                 tm.commit();
 
                 String desc = "[JTA Commit via " + tmJndi + "] Committed " + count + " message(s) atomically to queue via " + effectiveCfJndi + ".";
@@ -869,14 +841,6 @@ public class JmsService {
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "Error in JTA transactional batch send via " + tmJndi, e);
             try {
-                if (xaRes != null && tm != null) {
-                    try {
-                        Transaction t = tm.getTransaction();
-                        if (t != null) {
-                            t.delistResource(xaRes, XAResource.TMFAIL);
-                        }
-                    } catch (Exception ignored) {}
-                }
                 if (tm != null && tm.getStatus() == Status.STATUS_ACTIVE) {
                     tm.rollback();
                 }
@@ -898,7 +862,6 @@ public class JmsService {
             if (xaConn != null) {
                 try { xaConn.close(); } catch (Exception ignored) {}
             }
-            closeQuietly(conn);
             closeContext(ctx);
         }
     }
