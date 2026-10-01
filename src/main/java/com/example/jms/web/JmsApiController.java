@@ -20,6 +20,7 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -74,7 +75,7 @@ public class JmsApiController extends HttpServlet {
                 handleTestTm(req, resp);
             } else if ("/queue/receive".equals(path)) {
                 handleReceiveQueue(req, resp);
-            } else if ("/queue/receive-all".equals(path) || "/queue/drain".equals(path)) {
+            } else if ("/queue/receive-all".equals(path) || "/queue/drain".equals(path) || "/queue/receive-transactional".equals(path)) {
                 handleReceiveAllQueue(req, resp);
             } else if ("/topic/publish".equals(path)) {
                 handlePublishTopic(req, resp);
@@ -342,38 +343,54 @@ public class JmsApiController extends HttpServlet {
         int maxCount = body.getInt("maxCount", 1000);
         long timeout = body.getInt("timeout", 1500);
         String selector = body.getString("selector", "");
+        String txType = body.getString("txType", "JTA");
+        boolean simulateRollback = body.getBoolean("simulateRollback", false);
+        String tmJndi = sanitizeJndi(body.getString("tmJndi", DEFAULT_TM));
 
-        List<BrowsedMessage> messages = JmsService.getInstance().receiveAllQueueMessages(cfJndi, destJndi, maxCount, timeout, selector);
+        // Enforce input bounds
+        if (maxCount < 1) maxCount = 1;
+        if (maxCount > 2000) maxCount = 2000;
+
+        Map<String, Object> txResult = JmsService.getInstance().receiveQueueBatchTransactional(
+                cfJndi, destJndi, maxCount, timeout, selector, txType, simulateRollback, tmJndi
+        );
+
+        @SuppressWarnings("unchecked")
+        List<BrowsedMessage> messages = (List<BrowsedMessage>) txResult.get("messages");
+        if (messages == null) {
+            messages = Collections.emptyList();
+        }
 
         JsonObjectBuilder responseBuilder = Json.createObjectBuilder();
         responseBuilder.add("success", true);
         responseBuilder.add("count", messages.size());
+        responseBuilder.add("empty", (Boolean) txResult.getOrDefault("empty", messages.isEmpty()));
+        responseBuilder.add("txType", (String) txResult.getOrDefault("txType", txType));
+        responseBuilder.add("action", (String) txResult.getOrDefault("action", simulateRollback ? "ROLLBACK" : "COMMIT"));
+        responseBuilder.add("committed", (Boolean) txResult.getOrDefault("committed", !simulateRollback));
+        responseBuilder.add("details", (String) txResult.getOrDefault("message", "Batch consume completed."));
 
-        if (!messages.isEmpty()) {
-            responseBuilder.add("empty", false);
-            responseBuilder.add("details", "Successfully consumed " + messages.size() + " message(s) from " + destJndi);
-            JsonArrayBuilder arr = Json.createArrayBuilder();
-            for (BrowsedMessage msg : messages) {
-                JsonObjectBuilder msgObj = Json.createObjectBuilder()
-                        .add("messageId", msg.getMessageId() != null ? msg.getMessageId() : "N/A")
-                        .add("correlationId", msg.getCorrelationId() != null ? msg.getCorrelationId() : "")
-                        .add("timestamp", msg.getTimestamp() != null ? msg.getTimestamp() : "")
-                        .add("priority", msg.getPriority())
-                        .add("payload", msg.getPayload() != null ? msg.getPayload() : "");
-
-                JsonObjectBuilder propsObj = Json.createObjectBuilder();
-                for (Map.Entry<String, String> entry : msg.getProperties().entrySet()) {
-                    propsObj.add(entry.getKey(), entry.getValue() != null ? entry.getValue() : "");
-                }
-                msgObj.add("properties", propsObj);
-                arr.add(msgObj);
-            }
-            responseBuilder.add("messages", arr);
-        } else {
-            responseBuilder.add("empty", true);
-            responseBuilder.add("details", "Queue is empty or wait timed out (" + timeout + "ms)");
-            responseBuilder.add("messages", Json.createArrayBuilder());
+        if (txResult.containsKey("cfJndi")) {
+            responseBuilder.add("cfJndi", (String) txResult.get("cfJndi"));
         }
+
+        JsonArrayBuilder arr = Json.createArrayBuilder();
+        for (BrowsedMessage msg : messages) {
+            JsonObjectBuilder msgObj = Json.createObjectBuilder()
+                    .add("messageId", msg.getMessageId() != null ? msg.getMessageId() : "N/A")
+                    .add("correlationId", msg.getCorrelationId() != null ? msg.getCorrelationId() : "")
+                    .add("timestamp", msg.getTimestamp() != null ? msg.getTimestamp() : "")
+                    .add("priority", msg.getPriority())
+                    .add("payload", msg.getPayload() != null ? msg.getPayload() : "");
+
+            JsonObjectBuilder propsObj = Json.createObjectBuilder();
+            for (Map.Entry<String, String> entry : msg.getProperties().entrySet()) {
+                propsObj.add(entry.getKey(), entry.getValue() != null ? entry.getValue() : "");
+            }
+            msgObj.add("properties", propsObj);
+            arr.add(msgObj);
+        }
+        responseBuilder.add("messages", arr);
 
         writeJson(resp, responseBuilder.build());
     }

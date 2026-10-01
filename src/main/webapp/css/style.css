@@ -1266,7 +1266,8 @@ textarea:focus {
     gap: 6px;
 }
 
-.btn-preset-batch {
+.btn-preset-batch,
+.btn-preset-consume {
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
     color: var(--text-secondary);
@@ -1278,7 +1279,8 @@ textarea:focus {
     transition: all 0.15s;
 }
 
-.btn-preset-batch:hover {
+.btn-preset-batch:hover,
+.btn-preset-consume:hover {
     background: var(--bg-surface-elevated);
     border-color: var(--color-primary);
 }
@@ -1287,6 +1289,47 @@ textarea:focus {
     background: var(--color-accent);
     color: #ffffff;
     border-color: var(--color-accent);
+}
+
+.btn-preset-consume.active {
+    background: #d97706;
+    color: #ffffff;
+    border-color: #d97706;
+}
+
+.tx-consumer-lab {
+    border-color: rgba(217, 119, 6, 0.25);
+}
+
+.tx-consumer-lab:hover {
+    border-color: #d97706;
+}
+
+.tx-consumer-badge {
+    background: linear-gradient(135deg, #d97706, #b45309) !important;
+}
+
+.rolledback-row {
+    background-color: rgba(245, 158, 11, 0.08) !important;
+    border-left: 3px solid #d97706;
+}
+
+.rolledback-row:hover {
+    background-color: rgba(245, 158, 11, 0.15) !important;
+}
+
+.rolledback-badge {
+    display: inline-block;
+    background: rgba(217, 119, 6, 0.18);
+    color: #b45309;
+    border: 1px solid rgba(217, 119, 6, 0.35);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10.5px;
+    font-weight: 700;
+    margin-left: 8px;
+    letter-spacing: 0.3px;
+    vertical-align: middle;
 }
 
 .tx-actions-grid {

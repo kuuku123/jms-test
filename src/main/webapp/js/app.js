@@ -55,6 +55,16 @@
         txBatchCount: document.getElementById("tx-batch-count"),
         presetBatchBtns: document.querySelectorAll(".btn-preset-batch"),
         txModeRadios: document.querySelectorAll('input[name="tx-mode"]'),
+
+        // Consumer Transaction Controls
+        btnTxConsumeCommit: document.getElementById("btn-tx-consume-commit"),
+        btnTxConsumeRollback: document.getElementById("btn-tx-consume-rollback"),
+        txConsumeCount: document.getElementById("tx-consume-count"),
+        presetConsumeBtns: document.querySelectorAll(".btn-preset-consume"),
+        txConsumeModeRadios: document.querySelectorAll('input[name="tx-consume-mode"]'),
+        txConsumeCommitHint: document.getElementById("tx-consume-commit-hint"),
+        txConsumeRollbackHint: document.getElementById("tx-consume-rollback-hint"),
+
         browserSelector: document.getElementById("browser-selector"),
         btnBrowseQueue: document.getElementById("btn-browse-queue"),
         btnReceiveQueue: document.getElementById("btn-receive-queue"),
@@ -129,6 +139,7 @@
         setupPropertyEvents();
         setupQueueEvents();
         setupTransactionEvents();
+        setupTransactionConsumeEvents();
         setupTopicEvents();
         setupActivityEvents();
         setupModalEvents();
@@ -508,14 +519,14 @@
         // Consume All Messages (Drain)
         if (elements.btnConsumeAllQueue) {
             elements.btnConsumeAllQueue.addEventListener("click", function () {
-                consumeAllQueueMessages();
+                consumeAllQueueMessages(false);
             });
         }
 
         // Table Header Consume All Button
         if (elements.btnTableConsumeAll) {
             elements.btnTableConsumeAll.addEventListener("click", function () {
-                consumeAllQueueMessages();
+                consumeAllQueueMessages(false);
             });
         }
 
@@ -596,9 +607,12 @@
         if (elements.txModeRadios) {
             elements.txModeRadios.forEach(function (radio) {
                 radio.addEventListener("change", function () {
-                    document.querySelectorAll(".tx-radio-pill").forEach(function (pill) {
-                        pill.classList.remove("active");
-                    });
+                    const container = radio.closest(".tx-radio-pills");
+                    if (container) {
+                        container.querySelectorAll(".tx-radio-pill").forEach(function (pill) {
+                            pill.classList.remove("active");
+                        });
+                    }
                     const parentPill = radio.closest(".tx-radio-pill");
                     if (parentPill) parentPill.classList.add("active");
                 });
@@ -665,6 +679,81 @@
             });
     }
 
+    // Consumer Transaction Event Setup
+    function setupTransactionConsumeEvents() {
+        if (elements.btnTxConsumeCommit) {
+            elements.btnTxConsumeCommit.addEventListener("click", function () {
+                consumeAllQueueMessages(false);
+            });
+        }
+
+        if (elements.btnTxConsumeRollback) {
+            elements.btnTxConsumeRollback.addEventListener("click", function () {
+                consumeAllQueueMessages(true);
+            });
+        }
+
+        if (elements.presetConsumeBtns) {
+            elements.presetConsumeBtns.forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                    elements.presetConsumeBtns.forEach(function (b) { b.classList.remove("active"); });
+                    btn.classList.add("active");
+                    const count = parseInt(btn.getAttribute("data-count"), 10) || 1000;
+                    if (elements.txConsumeCount) {
+                        elements.txConsumeCount.value = count;
+                    }
+                });
+            });
+        }
+
+        if (elements.txConsumeModeRadios) {
+            elements.txConsumeModeRadios.forEach(function (radio) {
+                radio.addEventListener("change", function () {
+                    const container = radio.closest(".tx-radio-pills");
+                    if (container) {
+                        container.querySelectorAll(".tx-radio-pill").forEach(function (pill) {
+                            pill.classList.remove("active");
+                        });
+                    }
+                    const parentPill = radio.closest(".tx-radio-pill");
+                    if (parentPill) parentPill.classList.add("active");
+
+                    updateConsumeHints(radio.value);
+                });
+            });
+        }
+    }
+
+    function updateConsumeHints(txType) {
+        if (!elements.txConsumeCommitHint || !elements.txConsumeRollbackHint) return;
+
+        if (txType === "JTA") {
+            elements.txConsumeCommitHint.textContent = "Calls tm.commit() → Messages permanently removed";
+            elements.txConsumeRollbackHint.textContent = "Calls tm.rollback() → Messages returned to queue";
+            if (elements.btnTxConsumeRollback) {
+                elements.btnTxConsumeRollback.disabled = false;
+                elements.btnTxConsumeRollback.style.opacity = "1";
+                elements.btnTxConsumeRollback.style.pointerEvents = "auto";
+            }
+        } else if (txType === "LOCAL") {
+            elements.txConsumeCommitHint.textContent = "Calls session.commit() → Messages permanently removed";
+            elements.txConsumeRollbackHint.textContent = "Calls session.rollback() → Messages returned to queue";
+            if (elements.btnTxConsumeRollback) {
+                elements.btnTxConsumeRollback.disabled = false;
+                elements.btnTxConsumeRollback.style.opacity = "1";
+                elements.btnTxConsumeRollback.style.pointerEvents = "auto";
+            }
+        } else {
+            elements.txConsumeCommitHint.textContent = "Auto-acknowledged → Messages removed immediately";
+            elements.txConsumeRollbackHint.textContent = "Unavailable in Non-TX mode (no rollback support)";
+            if (elements.btnTxConsumeRollback) {
+                elements.btnTxConsumeRollback.disabled = true;
+                elements.btnTxConsumeRollback.style.opacity = "0.45";
+                elements.btnTxConsumeRollback.style.pointerEvents = "none";
+            }
+        }
+    }
+
     function browseQueue() {
         const cfJndi = encodeURIComponent(elements.inputCfJndi.value.trim());
         const destJndi = encodeURIComponent(elements.inputDestJndi.value.trim());
@@ -718,13 +807,40 @@
             });
     }
 
-    function consumeAllQueueMessages() {
+    function consumeAllQueueMessages(simulateRollback) {
+        if (state.isConsuming) {
+            return;
+        }
+        state.isConsuming = true;
+
+        if (typeof simulateRollback !== "boolean") {
+            simulateRollback = false;
+        }
+
         const destJndi = elements.inputDestJndi.value.trim();
         const cfJndi = elements.inputCfJndi.value.trim();
+        const tmJndi = elements.inputTmJndi ? elements.inputTmJndi.value.trim() : "java:/TransactionManager";
         const selector = elements.browserSelector.value.trim();
+
+        // Get selected consume transaction mode
+        const selectedModeRadio = document.querySelector('input[name="tx-consume-mode"]:checked');
+        const txType = selectedModeRadio ? selectedModeRadio.value : "JTA";
+
+        if (txType === "NONE" && simulateRollback) {
+            showToast("Rollback is not supported in Non-TX (AUTO_ACKNOWLEDGE) mode. Please select JTA or Local JMS.", "warning");
+            return;
+        }
+
+        let maxCount = 1000;
+        if (elements.txConsumeCount) {
+            maxCount = parseInt(elements.txConsumeCount.value, 10) || 1000;
+        }
 
         const btnMain = elements.btnConsumeAllQueue;
         const btnTable = elements.btnTableConsumeAll;
+        const btnCommit = elements.btnTxConsumeCommit;
+        const btnRollback = elements.btnTxConsumeRollback;
+
         const origMainText = btnMain ? btnMain.innerHTML : "";
         const origTableText = btnTable ? btnTable.innerHTML : "";
 
@@ -736,16 +852,27 @@
             btnTable.disabled = true;
             btnTable.innerHTML = "⏳ Consuming...";
         }
+        if (btnCommit) {
+            btnCommit.disabled = true;
+        }
+        if (btnRollback) {
+            btnRollback.disabled = true;
+        }
 
         const reqData = {
             cfJndi: cfJndi,
             destJndi: destJndi,
             selector: selector,
-            maxCount: 1000,
-            timeout: 1500
+            maxCount: maxCount,
+            timeout: 1500,
+            txType: txType,
+            simulateRollback: simulateRollback,
+            tmJndi: tmJndi
         };
 
-        showToast("Consuming all messages from " + destJndi + "...", "info");
+        const actionDesc = simulateRollback ? "Simulating rollback consume" : "Consuming messages";
+        const modeDesc = txType === "JTA" ? "JTA 2PC" : (txType === "LOCAL" ? "Local JMS TX" : "Non-TX");
+        showToast(actionDesc + " on " + destJndi + " (" + modeDesc + ")...", "info");
 
         fetchApi("/api/jms/queue/receive-all", "POST", reqData)
             .then(function (res) {
@@ -753,9 +880,12 @@
                     if (res.empty || res.count === 0) {
                         showToast(res.details || ("Queue " + destJndi + " is empty (0 messages consumed)."), "info");
                         browseQueue();
+                    } else if (res.action === "ROLLBACK") {
+                        showToast(res.details || ("Simulated rollback successful! " + res.count + " messages received but rolled back. They remain on " + destJndi + "."), "warning");
+                        renderConsumedTable(res.messages, destJndi, "ROLLBACK", res.txType);
                     } else {
-                        showToast("Successfully consumed all " + res.count + " messages from " + destJndi + "!", "success");
-                        renderConsumedTable(res.messages, destJndi);
+                        showToast(res.details || ("Successfully consumed and committed " + res.count + " message(s) from " + destJndi + "!"), "success");
+                        renderConsumedTable(res.messages, destJndi, "COMMIT", res.txType);
                     }
                     fetchActivities();
                 } else {
@@ -766,6 +896,7 @@
                 showToast("Consume request failed: " + err.message, "error");
             })
             .finally(function () {
+                state.isConsuming = false;
                 if (btnMain) {
                     btnMain.disabled = false;
                     btnMain.innerHTML = origMainText;
@@ -773,6 +904,14 @@
                 if (btnTable) {
                     btnTable.disabled = false;
                     btnTable.innerHTML = origTableText;
+                }
+                if (btnCommit) {
+                    btnCommit.disabled = false;
+                }
+                if (btnRollback) {
+                    if (txType !== "NONE") {
+                        btnRollback.disabled = false;
+                    }
                 }
             });
     }
@@ -1004,21 +1143,42 @@
         });
     }
 
-    function renderConsumedTable(messages, destJndi) {
+    function renderConsumedTable(messages, destJndi, action, txType) {
         elements.browseTableBody.replaceChildren();
-        elements.browseCountLabel.textContent = "Consumed " + messages.length + " Message(s) from " + destJndi + " (Queue Drained)";
-        if (elements.btnTableConsumeAll) {
-            elements.btnTableConsumeAll.style.display = "none";
+        const isRollback = action === "ROLLBACK";
+        const modeLabel = txType ? (txType === "JTA" ? "JTA 2PC" : (txType === "LOCAL" ? "Local JMS" : "Non-TX")) : "";
+
+        if (isRollback) {
+            elements.browseCountLabel.innerHTML =
+                '<span style="color:#d97706; font-weight:700;">Rolled Back ' + messages.length + ' Message(s)</span> on ' + destJndi +
+                ' (' + modeLabel + ' Rollback &bull; Uncommitted &bull; Messages Restored to Queue)';
+        } else {
+            elements.browseCountLabel.innerHTML =
+                'Consumed ' + messages.length + ' Message(s) from ' + destJndi +
+                ' (Queue Drained' + (modeLabel ? ' &bull; ' + modeLabel + ' Committed' : '') + ')';
         }
-        state.lastBrowsedMessages = [];
+
+        if (elements.btnTableConsumeAll) {
+            elements.btnTableConsumeAll.style.display = isRollback ? "inline-block" : "none";
+            if (isRollback && elements.tableConsumeCount) {
+                elements.tableConsumeCount.textContent = messages.length;
+            }
+        }
+        state.lastBrowsedMessages = isRollback ? messages : [];
 
         messages.forEach(function (msg) {
             const tr = document.createElement("tr");
-            tr.className = "consumed-row";
+            tr.className = isRollback ? "rolledback-row" : "consumed-row";
 
             const tdId = document.createElement("td");
             tdId.className = "mono-cell";
             tdId.textContent = truncate(msg.messageId, 24);
+            if (isRollback) {
+                const badge = document.createElement("span");
+                badge.className = "rolledback-badge";
+                badge.textContent = "ROLLED BACK";
+                tdId.appendChild(badge);
+            }
 
             const tdTime = document.createElement("td");
             tdTime.textContent = msg.timestamp;

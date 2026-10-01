@@ -249,6 +249,77 @@
                             </div>
                         </div>
 
+                        <!-- Transactional Consume Studio (JTA 2PC / Local JMS Session) -->
+                        <div class="tx-lab-container tx-consumer-lab">
+                            <div class="tx-lab-header">
+                                <div class="tx-lab-title">
+                                    <span class="tx-lab-badge tx-consumer-badge">TX Consume Lab</span>
+                                    <h4>Transactional Consume Studio</h4>
+                                </div>
+                                <span class="tx-lab-tm-badge" title="Target JNDI TransactionManager">java:/TransactionManager</span>
+                            </div>
+
+                            <p class="tx-lab-description">
+                                Enclose bulk message consumption within a 2-Phase Commit (2PC) JTA transaction using JEUS <code>java:/TransactionManager</code> and <code>XAConnectionFactory</code>, or a Local JMS transacted session.
+                            </p>
+
+                            <div class="tx-lab-controls">
+                                <div class="tx-mode-selector">
+                                    <span class="tx-control-label">Transaction Mode:</span>
+                                    <div class="tx-radio-pills">
+                                        <label class="tx-radio-pill active" title="Uses JEUS TransactionManager and XAConnectionFactory for 2-Phase Commit">
+                                            <input type="radio" name="tx-consume-mode" value="JTA" checked>
+                                            <span>JTA (java:/TransactionManager &bull; XA 2PC)</span>
+                                        </label>
+                                        <label class="tx-radio-pill" title="Uses local Session.SESSION_TRANSACTED commit/rollback">
+                                            <input type="radio" name="tx-consume-mode" value="LOCAL">
+                                            <span>Local JMS (session.commit / rollback)</span>
+                                        </label>
+                                        <label class="tx-radio-pill" title="Non-transactional AUTO_ACKNOWLEDGE (standard immediate drain)">
+                                            <input type="radio" name="tx-consume-mode" value="NONE">
+                                            <span>Non-TX (Auto-Ack)</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="tx-batch-row">
+                                    <div class="form-group flex-1">
+                                        <label for="tx-consume-count">Consume Limit</label>
+                                        <div class="tx-count-group">
+                                            <input type="number" id="tx-consume-count" min="1" max="2000" value="1000">
+                                            <div class="quick-batch-pills">
+                                                <button type="button" class="btn-preset-consume" data-count="10">10x</button>
+                                                <button type="button" class="btn-preset-consume" data-count="50">50x</button>
+                                                <button type="button" class="btn-preset-consume" data-count="100">100x</button>
+                                                <button type="button" class="btn-preset-consume active" data-count="1000">All (1000)</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="tx-actions-grid">
+                                    <button type="button" id="btn-tx-consume-commit" class="btn btn-tx-commit" title="Commit consume transaction">
+                                        <span class="tx-btn-icon">✓</span>
+                                        <div class="tx-btn-text">
+                                            <strong>Consume &amp; Commit</strong>
+                                            <small id="tx-consume-commit-hint">Calls tm.commit() &rarr; Messages permanently removed</small>
+                                        </div>
+                                    </button>
+                                    <button type="button" id="btn-tx-consume-rollback" class="btn btn-tx-rollback" title="Rollback consume transaction">
+                                        <span class="tx-btn-icon">✕</span>
+                                        <div class="tx-btn-text">
+                                            <strong>Simulate Rollback</strong>
+                                            <small id="tx-consume-rollback-hint">Calls tm.rollback() &rarr; Messages returned to queue</small>
+                                        </div>
+                                    </button>
+                                </div>
+
+                                <div class="tx-info-callout">
+                                    <strong>Verify Atomicity:</strong> Click <em>"Simulate Rollback"</em> then <em>"Browse Messages"</em> below &mdash; messages are received in the transaction but rolled back, so they remain in the queue! Click <em>"Consume &amp; Commit"</em> to permanently acknowledge and drain them.
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Dynamic Background Listener Toggle -->
                         <div class="listener-box">
                             <div class="listener-info">
@@ -583,9 +654,9 @@
                             <p>JEUS exposes its JTA Transaction Manager under the JNDI name <code>java:/TransactionManager</code>. This enables 2-Phase Commit (2PC) distributed transactions combining JMS and JDBC:</p>
                             <ul>
                                 <li><strong>TransactionManager Lookup</strong>: <code>(TransactionManager) ctx.lookup("java:/TransactionManager")</code></li>
-                                <li><strong>JTA Lifecycle</strong>: <code>tm.begin()</code> &rarr; send batch messages &rarr; <code>tm.commit()</code> or <code>tm.rollback()</code></li>
+                                <li><strong>JTA Lifecycle</strong>: <code>tm.begin()</code> &rarr; send or receive batch messages &rarr; <code>tm.commit()</code> or <code>tm.rollback()</code></li>
                                 <li><strong>XA Connection Factory</strong>: Use <code>XAConnectionFactory</code> for full XA/2PC enlistment or standard <code>ConnectionFactory</code> in container-managed sessions.</li>
-                                <li><strong>Atomicity Guarantee</strong>: Calling <code>tm.rollback()</code> ensures zero messages are delivered to consumers, preventing dirty reads or partial writes.</li>
+                                <li><strong>Atomicity Guarantee</strong>: Calling <code>tm.rollback()</code> ensures complete atomicity &mdash; uncommitted sent messages are discarded (producer), while uncommitted consumed messages are rolled back and restored to the queue (consumer).</li>
                             </ul>
                         </div>
                     </div>

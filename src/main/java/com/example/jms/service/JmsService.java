@@ -372,16 +372,17 @@ public class JmsService {
             }
             Queue queue = (Queue) destObj;
 
-            conn = cf.createConnection();
-            conn.start(); // Required to start delivery of messages!
-
-            session = conn.createSession(false, Session.AUTO_ACKNOWLEDGE);
+            SessionHolder holder = acquireAutoAckSession(cf);
+            conn = holder.conn;
+            session = holder.session;
 
             if (selector != null && !selector.trim().isEmpty()) {
                 consumer = session.createConsumer(queue, selector.trim());
             } else {
                 consumer = session.createConsumer(queue);
             }
+
+            conn.start(); // Required to start delivery of messages; started AFTER consumer and session are created!
 
             Message msg;
             if (timeoutMillis > 0) {
@@ -422,6 +423,10 @@ public class JmsService {
             }
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "Failed to receive from queue: " + queueJndi, e);
+            if (conn != null) {
+                markConnectionDirtyAndClose(conn);
+                conn = null;
+            }
             MessageActivityStore.getInstance().record(new ActivityRecord(
                     "RECEIVE", queueJndi, "N/A", "", 0, null, "", "ERROR", e.getMessage()
             ));
@@ -457,16 +462,17 @@ public class JmsService {
             }
             Queue queue = (Queue) destObj;
 
-            conn = cf.createConnection();
-            conn.start(); // Required to start delivery of messages!
-
-            session = conn.createSession(false, Session.AUTO_ACKNOWLEDGE);
+            SessionHolder holder = acquireAutoAckSession(cf);
+            conn = holder.conn;
+            session = holder.session;
 
             if (selector != null && !selector.trim().isEmpty()) {
                 consumer = session.createConsumer(queue, selector.trim());
             } else {
                 consumer = session.createConsumer(queue);
             }
+
+            conn.start(); // Required to start delivery of messages; started AFTER consumer and session are created!
 
             int limit = (maxCount > 0) ? Math.min(maxCount, 2000) : 1000;
             long initialTimeout = (timeoutMillis > 0) ? timeoutMillis : 1500;
@@ -529,6 +535,10 @@ public class JmsService {
             return receivedList;
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "Failed to batch receive from queue: " + queueJndi, e);
+            if (conn != null) {
+                markConnectionDirtyAndClose(conn);
+                conn = null;
+            }
             MessageActivityStore.getInstance().record(new ActivityRecord(
                     "RECEIVE_ALL", queueJndi, "N/A", "", 0, null, "", "ERROR", e.getMessage()
             ));
@@ -759,11 +769,12 @@ public class JmsService {
             }
 
             XAConnectionFactory xaCf = (XAConnectionFactory) cfObj;
-            xaConn = xaCf.createXAConnection();
             // In JEUS, createXASession() automatically detects the active thread's global transaction
             // started by tm.begin() and enlists the XAResource into the TransactionManager Coordinator.
-            xaSession = xaConn.createXASession();
-            session = xaSession.getSession();
+            XaSessionHolder xaHolder = acquireXaSession(xaCf);
+            xaConn = xaHolder.xaConn;
+            xaSession = xaHolder.xaSession;
+            session = xaHolder.session;
 
             producer = session.createProducer(queue);
             if (priority >= 0 && priority <= 9) {
@@ -847,6 +858,10 @@ public class JmsService {
             } catch (Exception rollbackEx) {
                 LOGGER.log(Level.WARNING, "Failed to rollback JTA transaction", rollbackEx);
             }
+            if (xaConn != null) {
+                markConnectionDirtyAndClose(xaConn);
+                xaConn = null;
+            }
 
             MessageActivityStore.getInstance().record(new ActivityRecord(
                     "TX_ROLLBACK", queueJndi, "N/A", correlationId, priority, properties, text,
@@ -890,9 +905,10 @@ public class JmsService {
             }
             Queue queue = (Queue) destObj;
 
-            conn = cf.createConnection();
             // Create a transacted local session
-            session = conn.createSession(true, Session.SESSION_TRANSACTED);
+            SessionHolder holder = acquireTransactedSession(cf);
+            conn = holder.conn;
+            session = holder.session;
             producer = session.createProducer(queue);
 
             if (priority >= 0 && priority <= 9) producer.setPriority(priority);
@@ -972,6 +988,424 @@ public class JmsService {
         }
     }
 
+    /**
+     * Receive and consume messages from a Queue within a Transaction (JTA Global or Local JMS Session).
+     *
+     * @param cfJndi ConnectionFactory JNDI name (e.g. "ConnectionFactory" or "XAConnectionFactory")
+     * @param queueJndi Destination Queue JNDI name
+     * @param maxCount Maximum number of messages to receive (1-2000)
+     * @param timeoutMillis Receive timeout in ms
+     * @param selector Optional JMS message selector
+     * @param txType "JTA" (via TransactionManager), "LOCAL" (via session.commit), or "NONE" (AUTO_ACKNOWLEDGE)
+     * @param simulateRollback If true, rollback the transaction; if false, commit
+     * @param tmJndi JNDI name of TransactionManager (default "java:/TransactionManager")
+     * @return Execution summary map with received messages and status
+     */
+    public Map<String, Object> receiveQueueBatchTransactional(
+            String cfJndi, String queueJndi, int maxCount, long timeoutMillis,
+            String selector, String txType, boolean simulateRollback, String tmJndi) throws Exception {
+
+        if (maxCount < 1) maxCount = 1;
+        if (maxCount > 2000) maxCount = 2000;
+
+        if (tmJndi == null || tmJndi.trim().isEmpty()) {
+            tmJndi = "java:/TransactionManager";
+        }
+        tmJndi = tmJndi.trim();
+
+        if (txType == null || txType.trim().isEmpty()) {
+            txType = "JTA";
+        }
+        txType = txType.trim().toUpperCase();
+
+        if ("LOCAL".equals(txType)) {
+            return receiveLocalTransactedBatch(cfJndi, queueJndi, maxCount, timeoutMillis, selector, simulateRollback);
+        } else if ("NONE".equals(txType) || "NON_TX".equals(txType) || "AUTO".equals(txType)) {
+            return receiveNonTransactedBatch(cfJndi, queueJndi, maxCount, timeoutMillis, selector);
+        } else {
+            return receiveJtaTransactedBatch(cfJndi, queueJndi, maxCount, timeoutMillis, selector, simulateRollback, tmJndi);
+        }
+    }
+
+    /**
+     * JTA Distributed Transaction Batch Consume using JEUS TransactionManager (java:/TransactionManager).
+     */
+    private Map<String, Object> receiveJtaTransactedBatch(
+            String cfJndi, String queueJndi, int maxCount, long timeoutMillis,
+            String selector, boolean simulateRollback, String tmJndi) throws Exception {
+
+        InitialContext ctx = null;
+        TransactionManager tm = null;
+        Session session = null;
+        XAConnection xaConn = null;
+        XASession xaSession = null;
+        MessageConsumer consumer = null;
+        List<BrowsedMessage> receivedList = new ArrayList<>();
+        Map<String, Object> result = new HashMap<>();
+        String effectiveCfJndi = cfJndi;
+
+        try {
+            ctx = new InitialContext();
+
+            // 1. Lookup TransactionManager from JNDI (e.g. java:/TransactionManager)
+            Object tmObj = ctx.lookup(tmJndi);
+            if (!(tmObj instanceof TransactionManager)) {
+                throw new IllegalStateException("Found object at '" + tmJndi + "' but it is not a javax.transaction.TransactionManager (Type: " + (tmObj != null ? tmObj.getClass().getName() : "null") + ")");
+            }
+            tm = (TransactionManager) tmObj;
+
+            // 2. Begin JTA Transaction
+            tm.begin();
+
+            // 3. Lookup Queue Destination
+            Object destObj = ctx.lookup(queueJndi);
+            if (destObj instanceof Topic) {
+                throw new IllegalArgumentException("Destination '" + queueJndi + "' is a Topic! Batch transactional consume targets Queues.");
+            }
+            if (!(destObj instanceof Queue)) {
+                throw new IllegalArgumentException("Destination '" + queueJndi + "' is not a JMS Queue (Type: " + (destObj != null ? destObj.getClass().getName() : "null") + ")");
+            }
+            Queue queue = (Queue) destObj;
+
+            // 4. Lookup ConnectionFactory & Enlist in Transaction
+            Object cfObj = null;
+            try {
+                cfObj = ctx.lookup(cfJndi);
+            } catch (Exception e) {
+                LOGGER.log(Level.FINE, "Lookup for " + cfJndi + " failed, attempting fallback to XAConnectionFactory", e);
+            }
+
+            if (!(cfObj instanceof XAConnectionFactory)) {
+                try {
+                    Object xaObj = ctx.lookup("XAConnectionFactory");
+                    if (xaObj instanceof XAConnectionFactory) {
+                        cfObj = xaObj;
+                        effectiveCfJndi = "XAConnectionFactory";
+                        LOGGER.info("Auto-resolved XAConnectionFactory from JNDI 'XAConnectionFactory' for JTA 2PC consume.");
+                    }
+                } catch (Exception ignored) {}
+            }
+
+            if (!(cfObj instanceof XAConnectionFactory)) {
+                String[] commonXaNames = {"jms/XAConnectionFactory", "java:comp/env/jms/XAConnectionFactory"};
+                for (String name : commonXaNames) {
+                    try {
+                        Object xaCandidate = ctx.lookup(name);
+                        if (xaCandidate instanceof XAConnectionFactory) {
+                            cfObj = xaCandidate;
+                            effectiveCfJndi = name;
+                            break;
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+
+            if (!(cfObj instanceof XAConnectionFactory)) {
+                throw new IllegalStateException("JTA transaction requires an XAConnectionFactory (e.g., 'XAConnectionFactory'). "
+                        + "Object at '" + cfJndi + "' is " + (cfObj != null ? cfObj.getClass().getName() : "not found")
+                        + ". Please configure or specify 'XAConnectionFactory' in JNDI settings.");
+            }
+
+            XAConnectionFactory xaCf = (XAConnectionFactory) cfObj;
+            XaSessionHolder xaHolder = acquireXaSession(xaCf);
+            xaConn = xaHolder.xaConn;
+            xaSession = xaHolder.xaSession;
+            session = xaHolder.session;
+
+            if (selector != null && !selector.trim().isEmpty()) {
+                consumer = session.createConsumer(queue, selector.trim());
+            } else {
+                consumer = session.createConsumer(queue);
+            }
+
+            xaConn.start(); // Started AFTER consumer and session are established
+
+            int limit = (maxCount > 0) ? Math.min(maxCount, 2000) : 1000;
+            long initialTimeout = (timeoutMillis > 0) ? timeoutMillis : 1500;
+
+            // 5. Receive messages inside transaction boundary
+            Message msg = consumer.receive(initialTimeout);
+            while (msg != null && receivedList.size() < limit) {
+                Map<String, String> props = extractProperties(msg);
+                String payload = extractPayload(msg);
+
+                BrowsedMessage received = new BrowsedMessage(
+                        msg.getJMSMessageID(),
+                        msg.getJMSCorrelationID(),
+                        msg.getJMSTimestamp(),
+                        msg.getJMSPriority(),
+                        msg.getJMSDeliveryMode(),
+                        msg.getJMSExpiration(),
+                        msg.getJMSRedelivered(),
+                        props,
+                        payload
+                );
+                receivedList.add(received);
+
+                if (receivedList.size() < limit) {
+                    msg = consumer.receive(150);
+                } else {
+                    break;
+                }
+            }
+
+            int count = receivedList.size();
+
+            // 6. Commit or Rollback according to simulateRollback flag
+            if (simulateRollback) {
+                tm.rollback();
+
+                String desc = "[JTA Consume Rollback via " + tmJndi + "] Received " + count + " message(s) via " + effectiveCfJndi + " and called tm.rollback(). Messages were restored and remain in " + queueJndi + " (redelivery).";
+                MessageActivityStore.getInstance().record(new ActivityRecord(
+                        "TX_ROLLBACK", queueJndi, count > 0 ? receivedList.get(0).getMessageId() : "TX-CONSUME-ABORTED",
+                        "", 0, null,
+                        count > 0 ? ("JTA Consume Rollback (" + count + " message(s) restored)") : "Queue was empty (Rollback)",
+                        "ROLLED_BACK", desc
+                ));
+
+                result.put("success", true);
+                result.put("txType", "JTA");
+                result.put("cfJndi", effectiveCfJndi);
+                result.put("action", "ROLLBACK");
+                result.put("committed", false);
+                result.put("count", count);
+                result.put("empty", count == 0);
+                result.put("messages", receivedList);
+                result.put("message", count > 0
+                        ? ("Simulated rollback successful! tm.rollback() was invoked on " + tmJndi + " using " + effectiveCfJndi + ". " + count + " message(s) were received but rolled back; all restored to " + queueJndi + ".")
+                        : ("Queue is empty or timeout expired. tm.rollback() completed cleanly."));
+            } else {
+                tm.commit();
+
+                int recordLimit = Math.min(count, 50);
+                for (int i = 0; i < recordLimit; i++) {
+                    BrowsedMessage m = receivedList.get(i);
+                    MessageActivityStore.getInstance().record(new ActivityRecord(
+                            "RECEIVE", queueJndi, m.getMessageId(), m.getCorrelationId(),
+                            m.getPriority(), m.getProperties(), m.getPayload(), "SUCCESS",
+                            "Bulk consumed via JTA TX (" + (i + 1) + " of " + count + ")"
+                    ));
+                }
+
+                String desc = "[JTA Consume Commit via " + tmJndi + "] Consumed and committed " + count + " message(s) atomically from " + queueJndi + " via " + effectiveCfJndi + ".";
+                MessageActivityStore.getInstance().record(new ActivityRecord(
+                        "TX_COMMIT", queueJndi, count > 0 ? receivedList.get(0).getMessageId() : "TX-CONSUME-EMPTY",
+                        "", 0, null,
+                        count > 0 ? ("JTA Consume Committed (" + count + " message(s))") : "Queue empty (Commit)",
+                        "COMMITTED", desc
+                ));
+
+                result.put("success", true);
+                result.put("txType", "JTA");
+                result.put("cfJndi", effectiveCfJndi);
+                result.put("action", "COMMIT");
+                result.put("committed", true);
+                result.put("count", count);
+                result.put("empty", count == 0);
+                result.put("messages", receivedList);
+                result.put("message", count > 0
+                        ? ("Transaction committed successfully! tm.commit() completed via " + tmJndi + " using " + effectiveCfJndi + ". " + count + " message(s) drained atomically from " + queueJndi + ".")
+                        : ("Queue is empty or timeout expired. tm.commit() completed cleanly."));
+            }
+
+            return result;
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "Error in JTA transactional consume via " + tmJndi, e);
+            try {
+                if (tm != null && tm.getStatus() == Status.STATUS_ACTIVE) {
+                    tm.rollback();
+                }
+            } catch (Exception rollbackEx) {
+                LOGGER.log(Level.WARNING, "Failed to rollback JTA transaction during consume error", rollbackEx);
+            }
+            if (xaConn != null) {
+                markConnectionDirtyAndClose(xaConn);
+                xaConn = null;
+            }
+
+            MessageActivityStore.getInstance().record(new ActivityRecord(
+                    "TX_ROLLBACK", queueJndi, "N/A", "", 0, null,
+                    "JTA Consume Error", "ERROR", "Consume failed and rolled back: " + e.getMessage()
+            ));
+            throw e;
+        } finally {
+            closeQuietly(consumer);
+            closeQuietly(session);
+            if (xaSession != null) {
+                try { xaSession.close(); } catch (Exception ignored) {}
+            }
+            if (xaConn != null) {
+                try { xaConn.close(); } catch (Exception ignored) {}
+            }
+            closeContext(ctx);
+        }
+    }
+
+    /**
+     * Local JMS Session Transaction Batch Consume (session.commit / session.rollback).
+     */
+    private Map<String, Object> receiveLocalTransactedBatch(
+            String cfJndi, String queueJndi, int maxCount, long timeoutMillis,
+            String selector, boolean simulateRollback) throws Exception {
+
+        InitialContext ctx = null;
+        Connection conn = null;
+        Session session = null;
+        MessageConsumer consumer = null;
+        List<BrowsedMessage> receivedList = new ArrayList<>();
+        Map<String, Object> result = new HashMap<>();
+
+        try {
+            ctx = new InitialContext();
+            ConnectionFactory cf = (ConnectionFactory) ctx.lookup(cfJndi);
+            Object destObj = ctx.lookup(queueJndi);
+            if (destObj instanceof Topic) {
+                throw new IllegalArgumentException("Destination '" + queueJndi + "' is a Topic! Batch transactional consume targets Queues.");
+            }
+            if (!(destObj instanceof Queue)) {
+                throw new IllegalArgumentException("Destination '" + queueJndi + "' is not a JMS Queue.");
+            }
+            Queue queue = (Queue) destObj;
+
+            // Create transacted local session
+            SessionHolder holder = acquireTransactedSession(cf);
+            conn = holder.conn;
+            session = holder.session;
+
+            if (selector != null && !selector.trim().isEmpty()) {
+                consumer = session.createConsumer(queue, selector.trim());
+            } else {
+                consumer = session.createConsumer(queue);
+            }
+
+            conn.start(); // Started AFTER session and consumer are created
+
+            int limit = (maxCount > 0) ? Math.min(maxCount, 2000) : 1000;
+            long initialTimeout = (timeoutMillis > 0) ? timeoutMillis : 1500;
+
+            Message msg = consumer.receive(initialTimeout);
+            while (msg != null && receivedList.size() < limit) {
+                Map<String, String> props = extractProperties(msg);
+                String payload = extractPayload(msg);
+
+                BrowsedMessage received = new BrowsedMessage(
+                        msg.getJMSMessageID(),
+                        msg.getJMSCorrelationID(),
+                        msg.getJMSTimestamp(),
+                        msg.getJMSPriority(),
+                        msg.getJMSDeliveryMode(),
+                        msg.getJMSExpiration(),
+                        msg.getJMSRedelivered(),
+                        props,
+                        payload
+                );
+                receivedList.add(received);
+
+                if (receivedList.size() < limit) {
+                    msg = consumer.receive(150);
+                } else {
+                    break;
+                }
+            }
+
+            int count = receivedList.size();
+
+            if (simulateRollback) {
+                session.rollback();
+
+                String desc = "[Local JMS Consume Rollback] Received " + count + " message(s) and called session.rollback(). Messages were restored and remain on " + queueJndi + " (redelivery).";
+                MessageActivityStore.getInstance().record(new ActivityRecord(
+                        "TX_ROLLBACK", queueJndi, count > 0 ? receivedList.get(0).getMessageId() : "LOCAL-ROLLBACK",
+                        "", 0, null,
+                        count > 0 ? ("Local JMS Consume Rollback (" + count + " message(s) restored)") : "Queue was empty (Rollback)",
+                        "ROLLED_BACK", desc
+                ));
+
+                result.put("success", true);
+                result.put("txType", "LOCAL");
+                result.put("action", "ROLLBACK");
+                result.put("committed", false);
+                result.put("count", count);
+                result.put("empty", count == 0);
+                result.put("messages", receivedList);
+                result.put("message", count > 0
+                        ? ("Local JMS transaction rolled back via session.rollback(). " + count + " message(s) restored and remain in " + queueJndi + ".")
+                        : ("Queue is empty or timeout expired. session.rollback() completed cleanly."));
+            } else {
+                session.commit();
+
+                int recordLimit = Math.min(count, 50);
+                for (int i = 0; i < recordLimit; i++) {
+                    BrowsedMessage m = receivedList.get(i);
+                    MessageActivityStore.getInstance().record(new ActivityRecord(
+                            "RECEIVE", queueJndi, m.getMessageId(), m.getCorrelationId(),
+                            m.getPriority(), m.getProperties(), m.getPayload(), "SUCCESS",
+                            "Bulk consumed via Local TX (" + (i + 1) + " of " + count + ")"
+                    ));
+                }
+
+                String desc = "[Local JMS Consume Commit] Consumed and committed " + count + " message(s) atomically from " + queueJndi + " via session.commit().";
+                MessageActivityStore.getInstance().record(new ActivityRecord(
+                        "TX_COMMIT", queueJndi, count > 0 ? receivedList.get(0).getMessageId() : "LOCAL-COMMIT",
+                        "", 0, null,
+                        count > 0 ? ("Local JMS Consume Committed (" + count + " message(s))") : "Queue empty (Commit)",
+                        "COMMITTED", desc
+                ));
+
+                result.put("success", true);
+                result.put("txType", "LOCAL");
+                result.put("action", "COMMIT");
+                result.put("committed", true);
+                result.put("count", count);
+                result.put("empty", count == 0);
+                result.put("messages", receivedList);
+                result.put("message", count > 0
+                        ? ("Local JMS transaction committed via session.commit(). " + count + " message(s) drained atomically from " + queueJndi + ".")
+                        : ("Queue is empty or timeout expired. session.commit() completed cleanly."));
+            }
+
+            return result;
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "Failed in local transacted batch consume: " + queueJndi, e);
+            if (session != null) {
+                try { session.rollback(); } catch (Exception ignored) {}
+            }
+            if (conn != null) {
+                markConnectionDirtyAndClose(conn);
+                conn = null;
+            }
+            MessageActivityStore.getInstance().record(new ActivityRecord(
+                    "TX_ROLLBACK", queueJndi, "N/A", "", 0, null,
+                    "Local Consume Error", "ERROR", "Local transaction error: " + e.getMessage()
+            ));
+            throw e;
+        } finally {
+            closeQuietly(consumer);
+            closeQuietly(session);
+            closeQuietly(conn);
+            closeContext(ctx);
+        }
+    }
+
+    /**
+     * Non-transacted batch consume (Session.AUTO_ACKNOWLEDGE).
+     */
+    private Map<String, Object> receiveNonTransactedBatch(
+            String cfJndi, String queueJndi, int maxCount, long timeoutMillis,
+            String selector) throws Exception {
+        List<BrowsedMessage> receivedList = receiveAllQueueMessages(cfJndi, queueJndi, maxCount, timeoutMillis, selector);
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("txType", "NONE");
+        result.put("action", "AUTO_ACKNOWLEDGE");
+        result.put("committed", true);
+        result.put("count", receivedList.size());
+        result.put("empty", receivedList.isEmpty());
+        result.put("messages", receivedList);
+        result.put("message", "Successfully consumed " + receivedList.size() + " message(s) via Session.AUTO_ACKNOWLEDGE.");
+        return result;
+    }
+
     public static Map<String, String> extractProperties(Message message) {
         Map<String, String> props = new HashMap<>();
         try {
@@ -1012,5 +1446,133 @@ public class JmsService {
                 ctx.close();
             } catch (Exception ignored) {}
         }
+    }
+
+    /**
+     * Session holder for managing connection and session pair safely.
+     */
+    private static class SessionHolder {
+        final Connection conn;
+        final Session session;
+
+        SessionHolder(Connection conn, Session session) {
+            this.conn = conn;
+            this.session = session;
+        }
+    }
+
+    /**
+     * XA Session holder for managing XA connection, XA session and standard session.
+     */
+    private static class XaSessionHolder {
+        final XAConnection xaConn;
+        final XASession xaSession;
+        final Session session;
+
+        XaSessionHolder(XAConnection xaConn, XASession xaSession, Session session) {
+            this.xaConn = xaConn;
+            this.xaSession = xaSession;
+            this.session = session;
+        }
+    }
+
+    /**
+     * Closes the connection and marks it dirty if it's a JEUS pooled connection
+     * so that it is evicted from the connection pool instead of recycled in an unusable state.
+     */
+    private static void markConnectionDirtyAndClose(Object connObj) {
+        if (connObj == null) return;
+        try {
+            try {
+                java.lang.reflect.Method setDirtyMethod = connObj.getClass().getMethod("setDirty");
+                setDirtyMethod.invoke(connObj);
+            } catch (Throwable ignored) {
+            }
+            if (connObj instanceof AutoCloseable) {
+                ((AutoCloseable) connObj).close();
+            } else {
+                try {
+                    java.lang.reflect.Method closeMethod = connObj.getClass().getMethod("close");
+                    closeMethod.invoke(connObj);
+                } catch (Throwable ignored) {}
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * Safely acquire a Connection and transacted Session, handling JEUS pool recycling conflicts.
+     */
+    private SessionHolder acquireTransactedSession(ConnectionFactory cf) throws Exception {
+        Exception lastEx = null;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            Connection conn = null;
+            try {
+                conn = cf.createConnection();
+                Session session = conn.createSession(true, Session.SESSION_TRANSACTED);
+                return new SessionHolder(conn, session);
+            } catch (Exception e) {
+                lastEx = e;
+                markConnectionDirtyAndClose(conn);
+                String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+                if (msg.contains("second session") || msg.contains("container") || msg.contains("already") || msg.contains("session")) {
+                    LOGGER.log(Level.WARNING, "JEUS pooled connection conflict on attempt " + attempt + "/3, evicting dirty connection: " + e.getMessage());
+                    continue;
+                }
+                throw e;
+            }
+        }
+        throw lastEx;
+    }
+
+    /**
+     * Safely acquire a Connection and auto-ack Session, handling JEUS pool recycling conflicts.
+     */
+    private SessionHolder acquireAutoAckSession(ConnectionFactory cf) throws Exception {
+        Exception lastEx = null;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            Connection conn = null;
+            try {
+                conn = cf.createConnection();
+                Session session = conn.createSession(false, Session.AUTO_ACKNOWLEDGE);
+                return new SessionHolder(conn, session);
+            } catch (Exception e) {
+                lastEx = e;
+                markConnectionDirtyAndClose(conn);
+                String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+                if (msg.contains("second session") || msg.contains("container") || msg.contains("already") || msg.contains("session")) {
+                    LOGGER.log(Level.WARNING, "JEUS pooled connection conflict on attempt " + attempt + "/3, evicting dirty connection: " + e.getMessage());
+                    continue;
+                }
+                throw e;
+            }
+        }
+        throw lastEx;
+    }
+
+    /**
+     * Safely acquire an XAConnection and XASession, handling JEUS pool recycling conflicts.
+     */
+    private XaSessionHolder acquireXaSession(XAConnectionFactory xaCf) throws Exception {
+        Exception lastEx = null;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            XAConnection xaConn = null;
+            try {
+                xaConn = xaCf.createXAConnection();
+                XASession xaSession = xaConn.createXASession();
+                Session session = xaSession.getSession();
+                return new XaSessionHolder(xaConn, xaSession, session);
+            } catch (Exception e) {
+                lastEx = e;
+                markConnectionDirtyAndClose(xaConn);
+                String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+                if (msg.contains("second session") || msg.contains("container") || msg.contains("already") || msg.contains("session")) {
+                    LOGGER.log(Level.WARNING, "JEUS pooled XA connection conflict on attempt " + attempt + "/3, evicting dirty connection: " + e.getMessage());
+                    continue;
+                }
+                throw e;
+            }
+        }
+        throw lastEx;
     }
 }
